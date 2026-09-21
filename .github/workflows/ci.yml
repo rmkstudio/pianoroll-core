@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Linux build and existing tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Configure existing CMake project
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPIANO_ROLL_CORE_BUILD_TESTS=ON -DPIANO_ROLL_CORE_BUILD_EXAMPLE=ON
+      - name: Compile
+        run: cmake --build build-ci --parallel 2
+      - name: Run existing CTest tests
+        run: ctest --test-dir build-ci --output-on-failure --no-tests=error --timeout 240
+      - name: Retain test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-test-logs
+          path: |
+            build-ci/Testing/Temporary/
+            build-ci/python-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
