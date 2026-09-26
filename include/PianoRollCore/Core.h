@@ -54,19 +54,43 @@ struct SnapPolicy {
 double snapTime(double time, const SnapPolicy&) noexcept;
 double snappedDelta(double anchorTime, double requestedDelta, const SnapPolicy&) noexcept;
 
+// Tick-domain grid reconstructed from the local FL engine timing path. The
+// adapter supplies time in quarter-note units; the policy converts to integer
+// ticks, selects an inclusive time segment, quantizes, and converts back.
+struct FlGridSegment {
+    int startTick = 0;
+    int endTick = std::numeric_limits<int>::max();
+    int unitTicks = 0;       // <= 0 uses ticksPerQuarter / division
+    int divisorTicks = 0;   // <= 0 uses unitTicks
+};
+struct FlTickGrid {
+    bool enabled = false;
+    int ticksPerQuarter = 96;
+    int division = 4;       // default 96 / 4 = 24 ticks
+    int mode = 0;            // low byte / 0x100 bias slot from CF2C70
+    std::vector<FlGridSegment> segments;
+};
+int flGridQuantizeTick(int tick, const FlTickGrid&) noexcept;
+double flGridQuantizeTime(double time, const FlTickGrid&) noexcept;
+double flGridSnappedDelta(double anchorTime, double requestedDelta,
+                          const FlTickGrid&) noexcept;
+
 // Only actually editable/participating notes contribute to group boundaries.
 struct GroupBounds {
     std::size_t count = 0;
     double earliest = std::numeric_limits<double>::infinity();
     double shortest = std::numeric_limits<double>::infinity();
     int lowestPitch = 127, highestPitch = 0;
+    double latest = -std::numeric_limits<double>::infinity(); // exclusive upper time bound
     void include(double start, double end, int pitch, bool editable = true) noexcept;
 };
 struct MoveDelta { double time = 0; int pitch = 0; };
 MoveDelta clampMove(const GroupBounds&, MoveDelta requested, double minimumTime = 0,
-                    int minimumPitch = 0, int maximumPitch = 127) noexcept;
+                    int minimumPitch = 0, int maximumPitch = 127,
+                    double maximumTime = std::numeric_limits<double>::infinity()) noexcept;
 bool allowsMove(const GroupBounds&, MoveDelta requested, double minimumTime = 0,
-                int minimumPitch = 0, int maximumPitch = 127) noexcept;
+                int minimumPitch = 0, int maximumPitch = 127,
+                double maximumTime = std::numeric_limits<double>::infinity()) noexcept;
 double clampResize(const GroupBounds&, double requestedLengthDelta,
                    double minimumLength) noexcept;
 
@@ -94,6 +118,13 @@ CopyPlan makeCopyPlan(const Indices& indices, std::size_t originalCount,
 
 enum class HitPolicy { lastPainted, closest };
 struct HitCandidate { Rect rect; double distance = 0; bool eligible = true; };
+enum class NoteHitKind { none, body, leftEdge, rightEdge };
+struct NoteHit {
+    std::size_t index = noIndex;
+    NoteHitKind kind = NoteHitKind::none;
+    double distance = std::numeric_limits<double>::infinity();
+    bool valid() const noexcept { return index != noIndex && kind != NoteHitKind::none; }
+};
 // Caller supplies note geometry and optional distance; first wins an equal-distance tie.
 template<class CandidateAt>
 int hitTest(std::size_t count, Point point, CandidateAt candidateAt,
@@ -107,6 +138,42 @@ int hitTest(std::size_t count, Point point, CandidateAt candidateAt,
             result = static_cast<int>(i);
             closest = c.distance;
         }
+    }
+    return result;
+}
+// Hit testing used by the editable note gesture. The edge band is evaluated only
+// inside the note's pitch row, so a short note cannot leak hits into adjacent
+// rows while the pointer may still land exactly on an end boundary. `lastPainted`
+// matches a painter's back-to-front list;
+// `closest` keeps the first equal-distance candidate stable.
+template<class CandidateAt>
+NoteHit noteHitTest(std::size_t count, Point point, CandidateAt candidateAt,
+                   double edgeZone = 5, HitPolicy policy = HitPolicy::lastPainted) {
+    NoteHit result;
+    edgeZone = std::max(0.0, std::isfinite(edgeZone) ? edgeZone : 0.0);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto c = candidateAt(i);
+        if (!c.eligible) continue;
+        const double left = std::abs(point.x - c.rect.x);
+        const double right = std::abs(point.x - c.rect.right());
+        const bool inRow = point.y >= c.rect.y && point.y < c.rect.bottom();
+        const bool inside = c.rect.contains(point);
+        const bool onLeft = inRow && point.x <= c.rect.right() && left <= edgeZone;
+        const bool onRight = inRow && point.x >= c.rect.x && right <= edgeZone;
+        if (!inside && !onLeft && !onRight) continue;
+        NoteHitKind kind = NoteHitKind::body;
+        double distance = c.distance;
+        if (onLeft || onRight) {
+            if (onLeft && (!onRight || left <= right)) {
+                kind = NoteHitKind::leftEdge;
+                distance = left;
+            } else {
+                kind = NoteHitKind::rightEdge;
+                distance = right;
+            }
+        }
+        if (!result.valid() || policy == HitPolicy::lastPainted || distance < result.distance)
+            result = {i, kind, distance};
     }
     return result;
 }

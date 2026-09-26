@@ -50,14 +50,33 @@ int main() {
     check(near(snapTime(-3, nearest), 0), "minimum insertion time");
     check(near(snapTime(50, {100.0 / 3, Rounding::nearest, 0, 1}), 67),
           "nondivisible original PPQ quantises only edited field");
+    FlTickGrid flGrid;
+    flGrid.enabled = true;
+    flGrid.ticksPerQuarter = 96;
+    flGrid.division = 4;
+    check(flGridQuantizeTick(108, flGrid) == 96,
+          "FL grid converts beat-domain input to 96 PPQ ticks");
+    check(near(flGridQuantizeTime(1.16, flGrid), 1.25) &&
+          near(flGridSnappedDelta(1.0, .16, flGrid), .25),
+          "FL grid anchors snap to the grabbed note");
+    flGrid.segments = {{48, 191, 12, 12}};
+    check(flGridQuantizeTick(70, flGrid) == 72 &&
+          flGridQuantizeTick(47, flGrid) == 48,
+          "FL grid uses inclusive time segments and nonzero segment bases");
+    flGrid.mode = 1;
+    check(flGridQuantizeTick(60, flGrid) == 48,
+          "FL mode bias follows the reconstructed minus-half branch");
 
     GroupBounds group;
     group.include(0, .001, 0, false); // read-only placeholder at bounds must not block edits
     group.include(2, 3, 60);
     group.include(5, 5.5, 64);
-    check(group.count == 2 && near(group.earliest, 2), "read-only note excluded from movement bounds");
+    check(group.count == 2 && near(group.earliest, 2) && near(group.latest, 5.5),
+          "read-only note excluded from movement bounds");
     auto move = clampMove(group, {-4, 100});
     check(near(move.time, -2) && move.pitch == 63, "mouse move clamps whole group preserving distances");
+    check(near(clampMove(group, {100, 0}, 0, 0, 127, 5.25).time, -.25),
+          "maximum document time clamps the whole group");
     check(!allowsMove(group, {-4, 0}) && allowsMove(group, {-2, -60}),
           "keyboard can reject instead of clamp");
     check(near(clampResize(group, -10, .125), -.375), "shortest eligible note limits resize");
@@ -88,6 +107,16 @@ int main() {
     check(hitTest(4, {5, 5}, at, HitPolicy::lastPainted) == 2, "Recover overlap selects last painted eligible note");
     check(hitTest(4, {5, 5}, at, HitPolicy::closest) == 1, "Lines overlap picks closest with stable first tie");
     check(hitTest(4, {30, 5}, at) == -1, "empty hit reports no index");
+    auto noteHit = noteHitTest(3, {0, 5}, [&](std::size_t i) {
+        return HitCandidate{{0, 0, i == 2 ? 4.0 : 20.0, 10}, static_cast<double>(i), true};
+    }, 5, HitPolicy::closest);
+    check(noteHit.valid() && noteHit.kind == NoteHitKind::leftEdge,
+          "edge hit is classified before body movement");
+    noteHit = noteHitTest(3, {20, 5}, [&](std::size_t i) {
+        return HitCandidate{{0, 0, 20, 10}, static_cast<double>(i), true};
+    }, 5, HitPolicy::lastPainted);
+    check(noteHit.valid() && noteHit.kind == NoteHitKind::rightEdge && noteHit.index == 2,
+          "right boundary uses the last-painted stacked note");
     std::vector<std::size_t> hits;
     forEachIntersecting(4, {2, 2, 3, 3}, [&](std::size_t i) { return candidates[i].rect; },
                         [&](std::size_t i) { return i == 1 || i == 3; },
