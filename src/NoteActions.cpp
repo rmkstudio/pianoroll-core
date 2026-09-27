@@ -32,7 +32,8 @@ NoteActionResult fail(const std::vector<ActionNote>& notes, const std::string& e
 bool same(const ActionNote& a, const ActionNote& b) {
     return a.start == b.start && a.end == b.end && a.pitch == b.pitch && a.velocity == b.velocity &&
         a.source == b.source && a.originalIndex == b.originalIndex && a.selected == b.selected &&
-        a.editable == b.editable && a.keySwitch == b.keySwitch && a.generated == b.generated;
+        a.editable == b.editable && a.keySwitch == b.keySwitch && a.muted == b.muted &&
+        a.generated == b.generated;
 }
 bool overlaps(const ActionNote& a, const ActionNote& b) {
     return a.source == b.source && a.pitch == b.pitch && a.start < b.end && b.start < a.end;
