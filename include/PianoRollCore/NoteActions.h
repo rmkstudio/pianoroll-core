@@ -96,6 +96,18 @@ NoteSelectionResult selectNotes(const std::vector<ActionNote>&, const NoteSelect
                                 const ActionRules& = {});
 NoteActionResult splitNotes(const std::vector<ActionNote>&, const ActionGrid&,
                            const ActionRules& = {});
+// Pointer-driven split at an exact time. The selected editable note is split
+// into two notes while preserving velocity and note metadata.
+NoteActionResult splitNoteAt(const std::vector<ActionNote>&, std::size_t noteIndex,
+                             double time, const ActionRules& = {});
+struct GlueOptions {
+    double tolerance = 1.0e-6;
+    bool selectedOnly = true;
+};
+// Merges touching/overlapping notes with matching source, pitch and keyswitch
+// semantics. The first note's metadata and velocity are retained.
+NoteActionResult glueNotes(const std::vector<ActionNote>&, const GlueOptions& = {},
+                           const ActionRules& = {});
 struct RepeatOptions {
     // Copies the selected phrase at positive period offsets into [start,end).
     // Originals remain unchanged. period=0 uses the selected phrase's extent.

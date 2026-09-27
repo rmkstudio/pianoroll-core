@@ -344,6 +344,57 @@ NoteActionResult splitNotes(const std::vector<ActionNote>& notes, const ActionGr
     }
     return finish(notes, std::move(out), r);
 }
+NoteActionResult splitNoteAt(const std::vector<ActionNote>& notes, std::size_t noteIndex,
+                             double time, const ActionRules& r) {
+    if (const auto error = inputError(notes, r); !error.empty()) return fail(notes, error);
+    if (noteIndex >= notes.size() || !target(notes[noteIndex], r) || !finite(time))
+        return fail(notes, "The split target must be a selected editable note.");
+    const auto& original = notes[noteIndex];
+    if (time - original.start < r.minimumLength || original.end - time < r.minimumLength)
+        return fail(notes, "The split would create a note shorter than the minimum length.");
+    auto out = notes;
+    out[noteIndex].end = time;
+    auto part = original;
+    part.start = time;
+    part.generated = true;
+    if (part.originalIndex == noIndex) part.originalIndex = noteIndex;
+    out.push_back(part);
+    return finish(notes, std::move(out), r);
+}
+NoteActionResult glueNotes(const std::vector<ActionNote>& notes, const GlueOptions& options,
+                           const ActionRules& r) {
+    if (const auto error = inputError(notes, r); !error.empty()) return fail(notes, error);
+    if (!finite(options.tolerance) || options.tolerance < 0)
+        return fail(notes, "Invalid glue tolerance.");
+    auto out = notes;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (!eligible(out[i], r) || (options.selectedOnly && !out[i].selected)) continue;
+        for (std::size_t j = i + 1; j < out.size();) {
+            auto& left = out[i];
+            const auto& right = out[j];
+            if (!eligible(right, r) || (options.selectedOnly && !right.selected) ||
+                left.source != right.source || left.pitch != right.pitch ||
+                left.keySwitch != right.keySwitch ||
+                right.start > left.end + options.tolerance ||
+                left.start > right.end + options.tolerance) {
+                ++j;
+                continue;
+            }
+            const bool keepLeft = left.start <= right.start;
+            const auto metadata = keepLeft ? left : right;
+            left.start = std::min(left.start, right.start);
+            left.end = std::max(left.end, right.end);
+            left.velocity = metadata.velocity;
+            left.source = metadata.source;
+            left.originalIndex = metadata.originalIndex;
+            left.selected = left.selected || right.selected;
+            left.editable = left.editable && right.editable;
+            left.generated = left.generated || right.generated;
+            out.erase(out.begin() + static_cast<std::ptrdiff_t>(j));
+        }
+    }
+    return finish(notes, std::move(out), r);
+}
 NoteActionResult repeatNotes(const std::vector<ActionNote>& notes, const RepeatOptions& o, const ActionRules& r) {
     if (const auto error = inputError(notes, r); !error.empty()) return fail(notes, error);
     if (!finite(o.start) || !finite(o.end) || !finite(o.period) || o.start < r.minimumTime ||

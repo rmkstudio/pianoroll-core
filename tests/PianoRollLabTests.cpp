@@ -51,6 +51,62 @@ int main() {
     check(selected == 3, "lasso selection is published without changing note timing");
 
     lab.resetDemo();
+    const auto overlap = lab.viewport().noteRect(4, 5, 60, 10, 2,
+        .5 - 10.0 / (2 * lab.viewport().rowHeight));
+    const Point overlapPoint{overlap.x + overlap.width * .5,
+                             overlap.y + overlap.height * .5};
+    lab.mouseDown(overlapPoint); lab.mouseUp(overlapPoint);
+    check(lab.gesture().hit().index == 4 && lab.notes()[4].selected,
+          "first overlap click chooses the last-painted note");
+    lab.mouseDown(overlapPoint); lab.mouseUp(overlapPoint);
+    check(lab.gesture().hit().index == 3 && lab.notes()[3].selected,
+          "second overlap click cycles to the next deletable note");
+    lab.tick(1.0);
+    check(lab.eraseSelected() && lab.notes().size() == 5,
+          "delete acts on the cycled overlap selection");
+    check(!lab.effects().fades().empty(), "delete keeps a render-only fade snapshot");
+    lab.tick(1.05);
+    check(!lab.effects().fades().empty(), "fade remains visible during its short lifetime");
+    lab.tick(1.2);
+    check(lab.effects().fades().empty(), "fade expires without retaining deleted notes");
+
+    lab.resetDemo();
+    const auto first = lab.viewport().noteRect(1, 2, 60, 10, 2,
+        .5 - 10.0 / (2 * lab.viewport().rowHeight));
+    const Point firstCenter{first.x + first.width * .5, first.y + first.height * .5};
+    lab.mouseDown(firstCenter); lab.mouseUp(firstCenter);
+    const auto bounds = lab.selectionBounds();
+    check(bounds.width > 0 && hitLassoResizeHandle({bounds.right(), bounds.y + bounds.height * .5}, bounds),
+          "selected notes expose the stretch affordance");
+    lab.mouseDown({bounds.right(), bounds.y + bounds.height * .5});
+    lab.mouseMove({bounds.right() + 60, bounds.y + bounds.height * .5});
+    check(lab.gesture().mode() == NoteGestureMode::scaleSelection && lab.gesture().changed(),
+          "stretch affordance starts a scale gesture");
+    check(lab.mouseUp({bounds.right() + 60, bounds.y + bounds.height * .5}) == CommitResult::committed,
+          "selection stretch commits as one undo item");
+
+    lab.resetDemo();
+    lab.setTool(ToolMode::slice);
+    const auto sliceRect = lab.viewport().noteRect(1, 2, 60, 10, 2,
+        .5 - 10.0 / (2 * lab.viewport().rowHeight));
+    lab.mouseDown({lab.viewport().timeToX(1.5), sliceRect.y + sliceRect.height * .5});
+    check(lab.notes().size() == 7 && lab.notes()[0].end == 1.5,
+          "slice tool splits the note at the pointer time");
+    lab.setTool(ToolMode::eraser);
+    const auto eraseRect = lab.viewport().noteRect(1.5, 2, 60, 10, 2,
+        .5 - 10.0 / (2 * lab.viewport().rowHeight));
+    lab.mouseDown({eraseRect.x + eraseRect.width * .5, eraseRect.y + eraseRect.height * .5});
+    check(lab.notes().size() == 6, "eraser tool removes one hit note and leaves a fade snapshot");
+    lab.resetDemo();
+    lab.setTool(ToolMode::glue);
+    const auto glueRect = lab.viewport().noteRect(4, 5, 60, 10, 2,
+        .5 - 10.0 / (2 * lab.viewport().rowHeight));
+    lab.mouseDown({glueRect.x + glueRect.width * .25, glueRect.y + glueRect.height * .5});
+    check(lab.notes().size() == 5 && lab.notes()[3].end == 5,
+          "glue tool merges the touching same-pitch run under the pointer");
+    lab.setTool(ToolMode::pointer);
+
+    lab.resetDemo();
     const auto before = lab.viewport().timeStart;
     const auto pitchBefore = lab.viewport().topPitch;
     lab.wheel({500, 250}, 0, .25, {});

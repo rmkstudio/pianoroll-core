@@ -382,11 +382,17 @@ const char* commandId(EditorCommand c) noexcept {
         case EditorCommand::down: return "notes.down"; case EditorCommand::left: return "notes.left";
         case EditorCommand::right: return "notes.right"; case EditorCommand::playPause: return "transport.playPause";
         case EditorCommand::home: return "transport.home"; case EditorCommand::pencil: return "tool.pencil";
-        case EditorCommand::pointer: return "tool.pointer"; default: return "";
+        case EditorCommand::pointer: return "tool.pointer";
+        case EditorCommand::eraser: return "tool.eraser";
+        case EditorCommand::slice: return "tool.slice";
+        case EditorCommand::glue: return "tool.glue";
+        case EditorCommand::paint: return "tool.paint";
+        case EditorCommand::mute: return "tool.mute";
+        default: return "";
     }
 }
 EditorCommand editorCommandForId(const std::string& id) noexcept {
-    for (int i = static_cast<int>(EditorCommand::escape); i <= static_cast<int>(EditorCommand::pointer); ++i)
+    for (int i = static_cast<int>(EditorCommand::escape); i <= static_cast<int>(EditorCommand::mute); ++i)
         if (id == commandId(static_cast<EditorCommand>(i))) return static_cast<EditorCommand>(i);
     return EditorCommand::none;
 }
@@ -426,6 +432,11 @@ std::vector<CommandSpec> standardPianoRollCommands() {
     add("view.fitSelection", "Fit selection / 适应选区", "View", "fit zoom selection 缩放 选区");
     add("tool.pencil", "Draw tool / 画笔", "Tools", "pencil draw paint 画笔 绘制", {{"1"}});
     add("tool.pointer", "Select tool / 选择工具", "Tools", "pointer select 选择 工具", {{"2"}});
+    add("tool.eraser", "Erase tool / 橡皮擦", "Tools", "eraser delete erase 橡皮 删除", {{"3"}});
+    add("tool.slice", "Slice tool / 切割", "Tools", "slice split cut 切割 分割", {{"4"}});
+    add("tool.glue", "Glue tool / 合并", "Tools", "glue merge join 合并 粘合", {{"5"}});
+    add("tool.paint", "Paint tool / 绘制复制", "Tools", "paint brush repeat duplicate 绘制 画刷 重复", {{"6"}});
+    add("tool.mute", "Mute tool / 静音", "Tools", "mute silence 静音", {{"7"}});
     const auto number = [](const char* id, const char* label, const char* value, double min, double max) {
         return CommandParameter{id, label, value, ParameterType::number, min, max, {}};
     };

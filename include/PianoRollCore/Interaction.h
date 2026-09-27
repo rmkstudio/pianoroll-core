@@ -10,7 +10,8 @@ enum class ShortcutKey { other, space, enter, home, escape, backspace, deleteKey
                          up, down, left, right, character };
 enum class EditorCommand { none, escape, undo, redo, deselect, selectAll, copy, cut,
                            paste, erase, up, down, left, right, playPause, home,
-                           pencil, pointer };
+                           pencil, pointer, eraser, slice, glue, paint, mute };
+enum class ToolMode { pointer, pencil, eraser, slice, glue, paint, mute };
 struct ShortcutInput {
     ShortcutKey key = ShortcutKey::other;
     char character = 0;
@@ -54,6 +55,8 @@ struct GroupScope {
 };
 // Shared edit gesture constraints and controller-lane drawing.
 MoveDelta constrainNoteDrag(MoveDelta, bool shiftAtMouseDown, InputModifiers current) noexcept;
+ToolMode toolModeForCommand(EditorCommand) noexcept;
+const char* toolModeName(ToolMode) noexcept;
 int laneValueAt(double y, Rect laneArea, int minimum = 1, int maximum = 127) noexcept;
 int relativeLaneValue(int baseline, int anchorBaseline, int requestedAnchor,
                       int minimum = 1, int maximum = 127) noexcept;
@@ -62,7 +65,31 @@ struct LaneStrokeSample { bool hit = false; int value = 0; };
 LaneStrokeSample sampleLaneStroke(double noteX, Rect laneArea, Point previous, Point current,
                                  bool first, double tolerance = 5,
                                  int minimum = 1, int maximum = 127) noexcept;
+// Controller lanes keep a fractional preview while the pointer moves.  The
+// adapter can paint this preview every frame and quantise only at commit,
+// avoiding the visibly stepped feel of repeatedly rounding raw mouse input.
+double smoothLaneValue(double previous, double target, double response = .35) noexcept;
+int smoothedLaneValue(double previous, double target, double response = .35,
+                      int minimum = 1, int maximum = 127) noexcept;
+// FL's note body tint is intentionally not a linear volume meter: low
+// velocities are a little lighter, while high velocities carry more colour.
+double velocityLightness(int velocity) noexcept;
 
+struct NoteGestureOptions;
+enum class NoteGesturePhase;
+enum class CursorHint { pencil, pointer, move, resizeHorizontal, lasso, select };
+enum class NoteFeedbackState { normal, hover, pressed, selected, overlapCandidate };
+struct PointerFeedback {
+    NoteHit hit{};
+    CursorHint cursor = CursorHint::pencil;
+    NoteFeedbackState note = NoteFeedbackState::normal;
+    bool ctrlSelect = false;
+    bool showLassoHint = false;
+    bool showResizeHandle = false;
+    Rect resizeHandle{};
+};
+Rect lassoResizeHandle(Rect lasso, double size = 12) noexcept;
+bool hitLassoResizeHandle(Point point, Rect lasso, double size = 12) noexcept;
 struct SoloState {
     int group = -1;
     void toggle(int target) noexcept { group = target < 0 || group == target ? -1 : target; }
@@ -72,7 +99,7 @@ struct SoloState {
 
 // Shared note-canvas gesture state. The adapter owns the document and undo
 // storage; this class owns only the mouse-down snapshot and the current draft.
-enum class NoteGestureMode { none, move, resizeLeft, resizeRight, lasso };
+enum class NoteGestureMode { none, move, resizeLeft, resizeRight, lasso, scaleSelection };
 enum class NoteGesturePhase { idle, armed, dragging, lassoing, committed, canceled };
 struct NoteGestureOptions {
     double deadZone = 4.0;          // pixels before a click becomes an edit
@@ -93,11 +120,24 @@ struct NoteGestureOptions {
     bool includeKeySwitches = false;
 };
 
+// Pure interaction feedback model. Rendering adapters map CursorHint and the
+// state/tint values to their toolkit-specific cursor and colours.
+PointerFeedback pointerFeedback(Point, const Viewport&,
+                                const std::vector<ActionNote>&,
+                                InputModifiers, const NoteGestureOptions&,
+                                NoteGesturePhase phase = NoteGesturePhase::idle,
+                                Rect lasso = {}, NoteHit pressed = {}) noexcept;
+
 class NoteGesture {
 public:
     void mouseDown(Point, Viewport, const std::vector<ActionNote>&,
                    std::uint64_t revision, InputModifiers = {},
-                   NoteGestureOptions = {});
+                   NoteGestureOptions = {}, std::size_t preferredHit = noIndex);
+    // Starts the horizontal selection-stretch affordance shown after a lasso.
+    // `selectionBounds` is screen-space and must enclose the selected notes.
+    void beginSelectionScale(Point, Viewport, const std::vector<ActionNote>&,
+                             std::uint64_t revision, Rect selectionBounds,
+                             InputModifiers = {}, NoteGestureOptions = {});
     void mouseMove(Point, InputModifiers = {});
     template<class Commit>
     CommitResult mouseUp(Point release, std::uint64_t currentRevision,
@@ -133,6 +173,7 @@ private:
     void rebuildDraftWithCopies();
     void updateMove(Point, InputModifiers);
     void updateResize(Point, InputModifiers);
+    void updateScale(Point, InputModifiers);
     void updateLasso(Point);
     void markIfChanged(const std::vector<ActionNote>& before) noexcept;
 

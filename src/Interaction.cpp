@@ -63,8 +63,37 @@ EditorCommand editorCommand(const ShortcutInput& input) noexcept {
         if (input.key == ShortcutKey::home) return EditorCommand::home;
         if (input.key == ShortcutKey::character && input.character == '1') return EditorCommand::pencil;
         if (input.key == ShortcutKey::character && input.character == '2') return EditorCommand::pointer;
+        if (input.key == ShortcutKey::character && input.character == '3') return EditorCommand::eraser;
+        if (input.key == ShortcutKey::character && input.character == '4') return EditorCommand::slice;
+        if (input.key == ShortcutKey::character && input.character == '5') return EditorCommand::glue;
+        if (input.key == ShortcutKey::character && input.character == '6') return EditorCommand::paint;
+        if (input.key == ShortcutKey::character && input.character == '7') return EditorCommand::mute;
     }
     return EditorCommand::none;
+}
+ToolMode toolModeForCommand(EditorCommand command) noexcept {
+    switch (command) {
+        case EditorCommand::pencil: return ToolMode::pencil;
+        case EditorCommand::pointer: return ToolMode::pointer;
+        case EditorCommand::eraser: return ToolMode::eraser;
+        case EditorCommand::slice: return ToolMode::slice;
+        case EditorCommand::glue: return ToolMode::glue;
+        case EditorCommand::paint: return ToolMode::paint;
+        case EditorCommand::mute: return ToolMode::mute;
+        default: return ToolMode::pointer;
+    }
+}
+const char* toolModeName(ToolMode mode) noexcept {
+    switch (mode) {
+        case ToolMode::pointer: return "pointer";
+        case ToolMode::pencil: return "pencil";
+        case ToolMode::eraser: return "eraser";
+        case ToolMode::slice: return "slice";
+        case ToolMode::glue: return "glue";
+        case ToolMode::paint: return "paint";
+        case ToolMode::mute: return "mute";
+        default: return "pointer";
+    }
 }
 void RulerGesture::begin(Point point, ViewState view, Rect area) noexcept {
     down_ = point; view_ = view; area_ = area;
@@ -143,6 +172,84 @@ LaneStrokeSample sampleLaneStroke(double noteX, Rect area, Point previous, Point
     const double y = previous.y + (current.y - previous.y) * (noteX - previous.x) / dx;
     return {true, laneValueAt(y, area, minimum, maximum)};
 }
+double smoothLaneValue(double previous, double target, double response) noexcept {
+    if (!std::isfinite(target)) return std::isfinite(previous) ? previous : 0;
+    if (!std::isfinite(previous)) previous = target;
+    if (!std::isfinite(response)) response = .35;
+    response = std::clamp(response, 0.0, 1.0);
+    return previous + (target - previous) * response;
+}
+int smoothedLaneValue(double previous, double target, double response,
+                      int minimum, int maximum) noexcept {
+    if (maximum < minimum) std::swap(minimum, maximum);
+    const auto value = static_cast<int>(std::lround(smoothLaneValue(previous, target, response)));
+    return std::clamp(value, minimum, maximum);
+}
+double velocityLightness(int velocity) noexcept {
+    velocity = std::clamp(velocity, 1, 127);
+    const double t = static_cast<double>(velocity - 1) / 126.0;
+    // Keep the difference subtle: weak notes are washed toward the lane
+    // background, while strong notes retain the saturated note colour.
+    return .92 - .24 * t;
+}
+
+Rect lassoResizeHandle(Rect lasso, double size) noexcept {
+    if (!std::isfinite(size) || size <= 0) size = 12;
+    const double half = size * .5;
+    return {lasso.right() - half, lasso.y + lasso.height * .5 - half, size, size};
+}
+bool hitLassoResizeHandle(Point point, Rect lasso, double size) noexcept {
+    return lasso.width > 0 && lasso.height > 0 &&
+           lassoResizeHandle(lasso, size).contains(point);
+}
+PointerFeedback pointerFeedback(Point point, const Viewport& view,
+                                const std::vector<ActionNote>& notes,
+                                InputModifiers modifiers,
+                                const NoteGestureOptions& options,
+                                NoteGesturePhase phase, Rect lasso,
+                                NoteHit pressed) noexcept {
+    PointerFeedback result;
+    result.ctrlSelect = modifiers.command;
+    result.showLassoHint = (phase == NoteGesturePhase::lassoing ||
+                            phase == NoteGesturePhase::idle ||
+                            phase == NoteGesturePhase::dragging ||
+                            phase == NoteGesturePhase::committed) &&
+                           lasso.width > 0 && lasso.height > 0;
+    if (result.showLassoHint) {
+        result.showResizeHandle = true;
+        result.resizeHandle = lassoResizeHandle(lasso);
+        result.cursor = hitLassoResizeHandle(point, lasso) ?
+            CursorHint::resizeHorizontal :
+            (phase == NoteGesturePhase::lassoing ? CursorHint::lasso : CursorHint::pointer);
+    }
+    auto candidateAt = [&](std::size_t i) {
+        const auto& note = notes[i];
+        const auto rect = view.noteRect(note.start, note.end, note.pitch,
+                                        options.noteHeight, options.minimumWidth,
+                                        .5 - options.noteHeight / (2 * view.rowHeight));
+        const double cx = rect.x + rect.width * .5;
+        const double cy = rect.y + rect.height * .5;
+        return HitCandidate{rect, std::hypot(point.x - cx, point.y - cy),
+                            note.editable && (options.includeKeySwitches || !note.keySwitch)};
+    };
+    result.hit = noteHitTest(notes.size(), point, candidateAt, options.edgeZone,
+                             options.hitPolicy);
+    if (result.hit.valid()) {
+        result.cursor = result.hit.kind == NoteHitKind::body ? CursorHint::move :
+                         CursorHint::resizeHorizontal;
+        const auto& note = notes[result.hit.index];
+        if (pressed.valid() && pressed.index == result.hit.index)
+            result.note = NoteFeedbackState::pressed;
+        else if (note.selected)
+            result.note = NoteFeedbackState::selected;
+        else
+            result.note = NoteFeedbackState::hover;
+        if (modifiers.command) result.cursor = CursorHint::select;
+    } else if (!result.showLassoHint) {
+        result.cursor = modifiers.command ? CursorHint::select : CursorHint::pencil;
+    }
+    return result;
+}
 
 bool NoteGesture::eligible(const ActionNote& note) const noexcept {
     return note.editable && (options_.includeKeySwitches || !note.keySwitch);
@@ -154,7 +261,7 @@ bool NoteGesture::crossedDeadZone(Point point) const noexcept {
 
 void NoteGesture::mouseDown(Point point, Viewport view, const std::vector<ActionNote>& notes,
                             std::uint64_t revision, InputModifiers modifiers,
-                            NoteGestureOptions options) {
+                            NoteGestureOptions options, std::size_t preferredHit) {
     cancel();
     options_ = options;
     if (!std::isfinite(options_.minimumTime)) options_.minimumTime = 0;
@@ -201,6 +308,18 @@ void NoteGesture::mouseDown(Point point, Viewport view, const std::vector<Action
         return HitCandidate{rect, std::hypot(point.x - cx, point.y - cy), eligible(note)};
     };
     hit_ = noteHitTest(draft_.size(), point, candidateAt, options_.edgeZone, options_.hitPolicy);
+    // An adapter may supply the next member of an overlap stack.  Validate it
+    // against the same geometry before accepting it so stale cycle state can
+    // never redirect a click outside the pointer's actual hit area.
+    if (preferredHit < draft_.size()) {
+        const auto preferred = candidateAt(preferredHit);
+        if (preferred.eligible) {
+            const auto one = noteHitTest(1, point,
+                [&](std::size_t) { return preferred; }, options_.edgeZone,
+                HitPolicy::lastPainted);
+            if (one.valid()) hit_ = {preferredHit, one.kind, one.distance};
+        }
+    }
     if (hit_.valid()) {
         mode_ = hit_.kind == NoteHitKind::leftEdge ? NoteGestureMode::resizeLeft :
                  hit_.kind == NoteHitKind::rightEdge ? NoteGestureMode::resizeRight :
@@ -220,6 +339,46 @@ void NoteGesture::mouseDown(Point point, Viewport view, const std::vector<Action
             for (auto& note : draft_) note.selected = false;
             baseline_ = draft_;
         }
+    }
+    edit_.begin(revision);
+    phase_ = NoteGesturePhase::armed;
+}
+
+void NoteGesture::beginSelectionScale(Point point, Viewport view,
+                                      const std::vector<ActionNote>& notes,
+                                      std::uint64_t revision, Rect selectionBounds,
+                                      InputModifiers modifiers,
+                                      NoteGestureOptions options) {
+    cancel();
+    options_ = options;
+    if (!std::isfinite(options_.minimumTime)) options_.minimumTime = 0;
+    if (!std::isfinite(options_.maximumTime) || options_.maximumTime <= options_.minimumTime)
+        options_.maximumTime = 1.0e12;
+    if (!std::isfinite(options_.minimumLength) || options_.minimumLength <= 0)
+        options_.minimumLength = 1.0e-9;
+    if (!std::isfinite(options_.noteHeight) || options_.noteHeight <= 0)
+        options_.noteHeight = 8.0;
+    if (!std::isfinite(options_.minimumWidth) || options_.minimumWidth < 0)
+        options_.minimumWidth = 2.0;
+    view_ = view;
+    down_ = last_ = point;
+    lasso_ = selectionBounds;
+    hit_ = {};
+    mode_ = NoteGestureMode::scaleSelection;
+    phase_ = NoteGesturePhase::idle;
+    downModifiers_ = modifiers;
+    copyPending_ = hasCopy_ = false;
+    copyPlan_ = {};
+    gestureIndices_.clear();
+    baseline_ = notes;
+    draft_ = notes;
+    for (std::size_t i = 0; i < baseline_.size(); ++i)
+        if (baseline_[i].selected && eligible(baseline_[i])) gestureIndices_.push_back(i);
+    if (gestureIndices_.empty() || !std::isfinite(selectionBounds.x) ||
+        !std::isfinite(selectionBounds.width) || selectionBounds.width <= 0 ||
+        !std::isfinite(view_.timeSpan) || view_.timeSpan <= 0) {
+        mode_ = NoteGestureMode::none;
+        return;
     }
     edit_.begin(revision);
     phase_ = NoteGesturePhase::armed;
@@ -311,6 +470,32 @@ void NoteGesture::updateResize(Point point, InputModifiers modifiers) {
     markIfChanged(before);
 }
 
+void NoteGesture::updateScale(Point point, InputModifiers modifiers) {
+    (void)modifiers;
+    const double left = view_.xToTime(lasso_.x);
+    const double right = view_.xToTime(lasso_.right());
+    const double span = right - left;
+    if (!std::isfinite(span) || span <= options_.minimumLength) return;
+    double targetRight = view_.xToTime(point.x);
+    if (options_.flGrid.enabled && !modifiers.alt)
+        targetRight = flGridQuantizeTime(targetRight, options_.flGrid);
+    else
+        targetRight = snapTime(targetRight, effectiveSnap(options_.snap, modifiers));
+    const double factor = std::clamp((targetRight - left) / span, .05, 100.0);
+    const auto before = draft_;
+    draft_ = baseline_;
+    for (auto index : gestureIndices_) {
+        if (index >= draft_.size() || !eligible(draft_[index])) continue;
+        auto& note = draft_[index];
+        const auto& original = baseline_[index];
+        note.start = std::clamp(left + (original.start - left) * factor,
+                                options_.minimumTime, options_.maximumTime);
+        note.end = std::clamp(left + (original.end - left) * factor,
+                              note.start + options_.minimumLength, options_.maximumTime);
+    }
+    markIfChanged(before);
+}
+
 void NoteGesture::updateLasso(Point point) {
     const auto before = draft_;
     lasso_ = Rect::fromPoints(down_, point);
@@ -344,6 +529,7 @@ void NoteGesture::mouseMove(Point point, InputModifiers modifiers) {
         if (mode_ == NoteGestureMode::move) updateMove(point, modifiers);
         else if (mode_ == NoteGestureMode::resizeLeft || mode_ == NoteGestureMode::resizeRight)
             updateResize(point, modifiers);
+        else if (mode_ == NoteGestureMode::scaleSelection) updateScale(point, modifiers);
     } else if (phase_ == NoteGesturePhase::lassoing) updateLasso(point);
 }
 

@@ -152,6 +152,22 @@ void splitRepeatStrumChecks() {
     for (std::size_t i = 2; i < result.notes.size(); ++i)
         check(result.notes[i].generated && result.notes[i].originalIndex == 0, "split copies retain source lineage for non-note MIDI attributes");
     check(result.notes[1].start == 0 && result.notes[1].end == 1, "split protects key switch duration");
+    auto pointerSplit = score({note(0, 1, 60)});
+    result = splitNoteAt(pointerSplit, 0, .4);
+    check(result && result.notes.size() == 2 && near(result.notes[0].end, .4) &&
+          near(result.notes[1].start, .4) && result.notes[1].generated,
+          "slice tool splits one selected note at the pointer time");
+    auto glueInput = score({note(0, .5, 60), note(.5, 1, 60), note(1.1, 1.5, 60),
+                            note(.5, 1, 64, true)});
+    glueInput[2].selected = false;
+    result = glueNotes(glueInput);
+    check(result && result.notes.size() == 3 && near(result.notes[0].start, 0) &&
+          near(result.notes[0].end, 1),
+          "glue merges selected touching notes but leaves an unselected note alone");
+    GlueOptions allGlue; allGlue.selectedOnly = false; allGlue.tolerance = .11;
+    result = glueNotes(glueInput, allGlue);
+    check(result && result.notes.size() == 2 && near(result.notes[0].end, 1.5),
+          "glue tolerance can join a short intentional gap");
     auto phrase = score({note(0, .5, 60), note(.5, 1, 62)});
     RepeatOptions repeat; repeat.start = 0; repeat.end = 2.25;
     result = repeatNotes(phrase, repeat);
