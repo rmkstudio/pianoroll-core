@@ -5,6 +5,7 @@
 namespace pianoroll {
 namespace {
 VisualColor baseColor(const ActionNote& note) noexcept {
+    if (note.muted) return {.42, .45, .48, .72};
     if (note.keySwitch) return {.74, .48, .88, 1};
     if (note.generated) return {.91, .61, .30, 1};
     if (!note.editable) return {.38, .46, .52, .82};
@@ -46,6 +47,11 @@ NoteVisual deriveNoteVisual(const ActionNote& note, NoteFeedbackState state,
     visual.velocityBarFraction = std::clamp(note.velocity / 127.0, 0.0, 1.0);
     visual.velocityBarAlpha = std::clamp(.28 + visual.velocityBarFraction * .35,
                                          config.velocityBarMinimumAlpha, 1.0);
+    if (note.muted) {
+        visual.fill.a *= .55;
+        visual.border = {.48, .52, .55, .8};
+        visual.velocityBarAlpha *= .35;
+    }
     visual.showVelocityBar = pixelWidth >= config.velocityBarMinimumWidth && note.editable;
     visual.keyRowActive = keyRowActive;
     return visual;
