@@ -10,7 +10,7 @@ if(TARGET PianoRollCore::PianoRollCore)
   return()
 endif()
 
-add_library(PianoRollCore STATIC src/PianoRollCore.cpp src/Navigation.cpp src/Interaction.cpp src/Controllers.cpp src/Meter.cpp src/Playback.cpp
+add_library(PianoRollCore STATIC src/PianoRollCore.cpp src/Navigation.cpp src/Interaction.cpp src/Presentation.cpp src/Controllers.cpp src/Meter.cpp src/Playback.cpp
   src/Commands.cpp src/MusicTools.cpp src/NoteActions.cpp src/AutomationActions.cpp)
 add_library(PianoRollCore::PianoRollCore ALIAS PianoRollCore)
 target_include_directories(PianoRollCore PUBLIC
