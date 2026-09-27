@@ -177,6 +177,40 @@ NoteHit noteHitTest(std::size_t count, Point point, CandidateAt candidateAt,
     }
     return result;
 }
+// Returns every eligible note under the pointer in paint order.  Adapters use
+// this stable stack to reproduce FL-style overlap cycling instead of guessing
+// from whichever note happened to be selected on the previous frame.
+template<class CandidateAt>
+std::vector<NoteHit> collectNoteHits(std::size_t count, Point point,
+                                     CandidateAt candidateAt,
+                                     double edgeZone = 5) {
+    std::vector<NoteHit> result;
+    edgeZone = std::max(0.0, std::isfinite(edgeZone) ? edgeZone : 0.0);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto c = candidateAt(i);
+        if (!c.eligible) continue;
+        const double left = std::abs(point.x - c.rect.x);
+        const double right = std::abs(point.x - c.rect.right());
+        const bool inRow = point.y >= c.rect.y && point.y < c.rect.bottom();
+        const bool inside = c.rect.contains(point);
+        const bool onLeft = inRow && point.x <= c.rect.right() && left <= edgeZone;
+        const bool onRight = inRow && point.x >= c.rect.x && right <= edgeZone;
+        if (!inside && !onLeft && !onRight) continue;
+        NoteHitKind kind = NoteHitKind::body;
+        double distance = c.distance;
+        if (onLeft || onRight) {
+            if (onLeft && (!onRight || left <= right)) {
+                kind = NoteHitKind::leftEdge;
+                distance = left;
+            } else {
+                kind = NoteHitKind::rightEdge;
+                distance = right;
+            }
+        }
+        result.push_back({i, kind, distance});
+    }
+    return result;
+}
 template<class RectAt, class IsEligible, class OnHit>
 void forEachIntersecting(std::size_t count, Rect box, RectAt rectAt,
                         IsEligible isEligible, OnHit onHit) {
