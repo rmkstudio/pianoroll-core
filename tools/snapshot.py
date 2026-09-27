@@ -23,12 +23,13 @@ def is_build_binary(path):
 
 
 def source_paths(root):
-    return sorted(p for p in root.rglob("*")
-                  if p.is_file() and p.name not in GENERATED
-                  and not any(part in EXCLUDED_DIRS or part.startswith("build-")
-                              for part in p.relative_to(root).parts)
-                  and p.suffix not in {".pyc", ".zip"}
-                  and not is_build_binary(p))
+    return sorted((p for p in root.rglob("*")
+                   if p.is_file() and p.name not in GENERATED
+                   and not any(part in EXCLUDED_DIRS or part.startswith("build-")
+                               for part in p.relative_to(root).parts)
+                   and p.suffix not in {".pyc", ".zip"}
+                   and not is_build_binary(p)),
+                  key=lambda p: p.relative_to(root).as_posix())
 
 
 def digest(path):

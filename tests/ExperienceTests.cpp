@@ -83,6 +83,18 @@ int main() {
     check(editorCommand(input) == EditorCommand::pencil, "tool 1 always pencil");
     input.character = '2';
     check(editorCommand(input) == EditorCommand::pointer, "tool 2 always pointer");
+    input.character = '3';
+    check(editorCommand(input) == EditorCommand::eraser &&
+          toolModeForCommand(EditorCommand::eraser) == ToolMode::eraser,
+          "tool 3 selects the reusable eraser mode");
+    input.character = '4';
+    check(editorCommand(input) == EditorCommand::slice &&
+          toolModeForCommand(EditorCommand::slice) == ToolMode::slice,
+          "tool 4 selects the reusable slice mode");
+    input.character = '5';
+    check(editorCommand(input) == EditorCommand::glue &&
+          toolModeForCommand(EditorCommand::glue) == ToolMode::glue,
+          "tool 5 selects the reusable glue mode");
     input = {ShortcutKey::character,'z',{true,true,false}};
     check(editorCommand(input) == EditorCommand::redo, "Ctrl Shift Z is redo including lowercase input");
     input.textInputFocused = true;
@@ -123,6 +135,13 @@ int main() {
     check(locked.pitch==4, "Shift copy may move in both axes");
     check(velocityWheelDelta(.001)==1 && velocityWheelDelta(-10)==-1 && velocityWheelDelta(0)==0, "Alt wheel velocity uses one MIDI step");
     check(relativeLaneValue(60,80,100)==80 && relativeLaneValue(120,80,100)==127, "relative velocity preserves offsets with MIDI clamp");
+    check(near(smoothLaneValue(0, 100, .5), 50) && smoothedLaneValue(0, 100, .5) == 50,
+          "velocity preview keeps fractional pointer response");
+    check(velocityLightness(1) > velocityLightness(127),
+          "weak velocity receives the lighter note tint");
+    check(hitLassoResizeHandle({110, 40}, {10, 20, 100, 40}) &&
+          !hitLassoResizeHandle({20, 30}, {10, 20, 100, 40}),
+          "selection stretch handle has a narrow hit target");
     Rect lane{0,0,100,127};
     auto stroke = sampleLaneStroke(50,lane,{0,127},{100,0},false);
     check(stroke.hit && stroke.value==64, "fast lane stroke interpolates crossed note columns");
@@ -191,5 +210,99 @@ int main() {
     for(auto mark:triplet) if(near(mark.time,6.5)) hasHalf=mark.beatStart;
     check(hasHalf, "triplet snap does not hide eighth-note beat line");
     check(meter.grid(0,10000,0,32,.25).size()<=32, "snap subdivision work obeys grid budget");
+
+    // Editable note gesture: FL-style dead-zone, anchored snap, resize/copy,
+    // lasso selection, group clamp and one-shot revision-gated commit.
+    Viewport noteView{{80, 40, 800, 490}, 0, 16, 84, 12};
+    NoteGestureOptions gestureOptions;
+    gestureOptions.snap = {.25, Rounding::nearest, 0, 0};
+    gestureOptions.minimumLength = .125;
+    std::vector<ActionNote> score{{2, 3, 60, 100, 0, 0, true, true, false, false},
+                                  {5, 6, 64, 90, 0, 1, true, true, false, false},
+                                  {8, 9, 67, 80, 0, 2, false, true, false, false}};
+    const auto firstRect = noteView.noteRect(score[0].start, score[0].end, score[0].pitch,
+                                             gestureOptions.noteHeight, gestureOptions.minimumWidth,
+                                             .5 - gestureOptions.noteHeight / (2 * noteView.rowHeight));
+    const Point firstPoint{firstRect.x + firstRect.width * .5, firstRect.y + firstRect.height * .5};
+    NoteGesture gesture;
+    gesture.mouseDown(firstPoint, noteView, score, 21, {}, gestureOptions);
+    gesture.mouseMove({firstPoint.x + 2, firstPoint.y}, {});
+    check(gesture.phase() == NoteGesturePhase::armed && !gesture.changed(),
+          "note drag keeps the dead-zone as an armed click");
+    gesture.mouseMove({noteView.timeToX(2.66), firstPoint.y - noteView.rowHeight}, {});
+    check(gesture.phase() == NoteGesturePhase::dragging && gesture.draft()[0].start == 2.25 &&
+          gesture.draft()[0].pitch == 61 && gesture.draft()[1].start == 5.25,
+          "move snaps from the grabbed note and carries the selected group");
+    int gestureCommits = 0;
+    std::vector<ActionNote> committed;
+    auto committedResult = gesture.mouseUp({noteView.timeToX(2.66), firstPoint.y - noteView.rowHeight}, 21, {},
+        [&](const std::vector<ActionNote>& draft) { ++gestureCommits; committed = draft; return true; });
+    check(committedResult == CommitResult::committed && gestureCommits == 1 && committed[1].pitch == 65,
+          "mouse-up publishes one musical edit");
+    check(gesture.mouseUp(firstPoint, 21, {}, [&](const auto&) { ++gestureCommits; return true; }) ==
+              CommitResult::inactive && gestureCommits == 1,
+          "duplicate mouse-up cannot create a second undo item");
+
+    std::vector<ActionNote> overlapScore{{2, 3, 60, 100, 0, 0, true, true, false, false},
+                                         {2, 3, 60, 90, 0, 1, true, true, false, false}};
+    NoteGesture preferred;
+    preferred.mouseDown(firstPoint, noteView, overlapScore, 21, {}, gestureOptions, 1);
+    check(preferred.hit().valid() && preferred.hit().index == 1,
+          "overlap cycle can pin the adapter-selected stack member");
+    auto feedback = pointerFeedback(firstPoint, noteView, overlapScore, {}, gestureOptions,
+                                    NoteGesturePhase::armed, {}, preferred.hit());
+    check(feedback.hit.valid() && feedback.note == NoteFeedbackState::pressed &&
+          feedback.cursor == CursorHint::move,
+          "pressed note feedback exposes move cursor and pressed tint state");
+
+    NoteGesture resize;
+    resize.mouseDown({firstRect.x + 1, firstPoint.y}, noteView, score, 22, {}, gestureOptions);
+    resize.mouseMove({noteView.timeToX(2.95), firstPoint.y}, {});
+    check(resize.mode() == NoteGestureMode::resizeLeft &&
+          resize.draft()[0].end - resize.draft()[0].start >= .125,
+          "left-edge resize preserves minimum note length");
+
+    NoteGesture copy;
+    copy.mouseDown(firstPoint, noteView, score, 23, {false, true, false}, gestureOptions);
+    copy.mouseMove({firstPoint.x + 8, firstPoint.y}, {false, true, false});
+    check(copy.draft().size() == score.size() + 2 && copy.hit().index >= score.size() &&
+          copy.draft().back().generated,
+          "Shift-drag creates copies and follows the grabbed copy anchor");
+
+    NoteGesture lasso;
+    lasso.mouseDown({noteView.timeToX(1.5), noteView.pitchToY(68)}, noteView, score, 24, {}, gestureOptions);
+    lasso.mouseMove({noteView.timeToX(6.5), noteView.pitchToY(58)}, {});
+    std::size_t selectedByLasso = 0;
+    for (const auto& note : lasso.draft()) selectedByLasso += note.selected ? 1u : 0u;
+    check(lasso.phase() == NoteGesturePhase::lassoing && selectedByLasso == 2,
+          "blank-area drag selects intersecting notes without an edit undo");
+    check(lasso.commit(24, [&](const auto&) { ++gestureCommits; return true; }) == CommitResult::unchanged,
+          "lasso selection is not misreported as a musical edit");
+
+    std::vector<ActionNote> selectedScore{{2, 3, 60, 100, 0, 0, true, true, false, false},
+                                          {4, 5, 64, 90, 0, 1, true, true, false, false}};
+    selectedScore[0].selected = selectedScore[1].selected = true;
+    const auto selectedBounds = Rect{noteView.timeToX(2), noteView.pitchToY(64),
+                                    noteView.timeToX(5) - noteView.timeToX(2), 20};
+    NoteGesture scale;
+    scale.beginSelectionScale({selectedBounds.right(), selectedBounds.y + 10}, noteView,
+                               selectedScore, 28, selectedBounds, {}, gestureOptions);
+    scale.mouseMove({selectedBounds.right() + 80, selectedBounds.y + 10}, {});
+    check(scale.mode() == NoteGestureMode::scaleSelection && scale.changed() &&
+          scale.draft()[1].end > selectedScore[1].end,
+          "selection stretch scales the selected group from its left anchor");
+
+    NoteGesture stale;
+    stale.mouseDown(firstPoint, noteView, score, 25, {}, gestureOptions);
+    stale.mouseMove({firstPoint.x + 8, firstPoint.y}, {});
+    check(stale.commit(26, [&](const auto&) { ++gestureCommits; return true; }) == CommitResult::stale &&
+          gestureCommits == 1,
+          "document replacement makes the old gesture stale");
+    NoteGesture canceled;
+    canceled.mouseDown(firstPoint, noteView, score, 27, {}, gestureOptions);
+    canceled.mouseMove({firstPoint.x + 8, firstPoint.y}, {});
+    canceled.cancel();
+    check(canceled.commit(27, [&](const auto&) { ++gestureCommits; return true; }) == CommitResult::inactive,
+          "cancelled gesture cannot commit");
     std::cout << passed << " experience checks passed\n";
 }

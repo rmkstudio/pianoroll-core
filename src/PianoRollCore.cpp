@@ -50,26 +50,76 @@ double snapTime(double time, const SnapPolicy& p) noexcept {
 double snappedDelta(double anchor, double requested, const SnapPolicy& policy) noexcept {
     return snapTime(anchor + requested, policy) - anchor;
 }
+namespace {
+const FlGridSegment& flSegmentAt(int tick, const FlTickGrid& grid,
+                                  FlGridSegment& fallback) noexcept {
+    const auto defaultUnit = std::max(1, grid.ticksPerQuarter /
+                                           std::max(1, grid.division));
+    fallback = {0, std::numeric_limits<int>::max(), defaultUnit, defaultUnit};
+    for (const auto& segment : grid.segments) {
+        if (segment.startTick <= tick && tick <= segment.endTick) return segment;
+    }
+    if (tick <= 0 && !grid.segments.empty()) return grid.segments.front();
+    return fallback;
+}
+}
+int flGridQuantizeTick(int tick, const FlTickGrid& grid) noexcept {
+    if (!grid.enabled) return tick;
+    FlGridSegment fallback;
+    const auto& segment = flSegmentAt(tick, grid, fallback);
+    const int defaultUnit = std::max(1, grid.ticksPerQuarter /
+                                          std::max(1, grid.division));
+    const int unit = std::max(1, segment.unitTicks > 0 ? segment.unitTicks : defaultUnit);
+    const int divisor = std::max(1, segment.divisorTicks > 0 ? segment.divisorTicks : unit);
+    double ratio = static_cast<double>(tick - segment.startTick) /
+                   static_cast<double>(divisor);
+    // CF2C70 adds the exact -0.5 constant for low mode 1 or bit 0x100 before
+    // its integer conversion. nearbyint matches the default MXCSR nearest mode.
+    if ((grid.mode & 0xff) == 1 || (grid.mode & 0x100) != 0) ratio -= 0.5;
+    const auto steps = static_cast<long long>(std::nearbyint(ratio));
+    const auto result = static_cast<long long>(segment.startTick) + steps * unit;
+    return static_cast<int>(std::clamp(result,
+                                       static_cast<long long>(std::numeric_limits<int>::min()),
+                                       static_cast<long long>(std::numeric_limits<int>::max())));
+}
+double flGridQuantizeTime(double time, const FlTickGrid& grid) noexcept {
+    if (!grid.enabled || !std::isfinite(time)) return time;
+    const int ppq = std::max(1, grid.ticksPerQuarter);
+    const auto ticks = static_cast<long long>(std::llround(time * ppq));
+    const auto clamped = std::clamp(ticks,
+                                    static_cast<long long>(std::numeric_limits<int>::min()),
+                                    static_cast<long long>(std::numeric_limits<int>::max()));
+    return static_cast<double>(flGridQuantizeTick(static_cast<int>(clamped), grid)) /
+           static_cast<double>(ppq);
+}
+double flGridSnappedDelta(double anchorTime, double requestedDelta,
+                          const FlTickGrid& grid) noexcept {
+    return flGridQuantizeTime(anchorTime + requestedDelta, grid) - anchorTime;
+}
 void GroupBounds::include(double start, double end, int pitch, bool editable) noexcept {
     if (!editable || !std::isfinite(start) || !std::isfinite(end) || end <= start ||
         pitch < 0 || pitch > 127) return;
     ++count;
     earliest = std::min(earliest, start);
+    latest = std::max(latest, end);
     shortest = std::min(shortest, end - start);
     lowestPitch = std::min(lowestPitch, pitch);
     highestPitch = std::max(highestPitch, pitch);
 }
 MoveDelta clampMove(const GroupBounds& b, MoveDelta requested, double minTime,
-                    int minPitch, int maxPitch) noexcept {
+                    int minPitch, int maxPitch, double maxTime) noexcept {
     if (!b.count || !std::isfinite(requested.time) || minPitch > maxPitch) return {};
     const int lo = minPitch - b.lowestPitch, hi = maxPitch - b.highestPitch;
     if (lo > hi) return {};
-    return {std::max(minTime - b.earliest, requested.time), std::clamp(requested.pitch, lo, hi)};
+    double time = std::max(minTime - b.earliest, requested.time);
+    if (std::isfinite(maxTime) && std::isfinite(b.latest))
+        time = std::min(maxTime - b.latest, time);
+    return {time, std::clamp(requested.pitch, lo, hi)};
 }
 bool allowsMove(const GroupBounds& b, MoveDelta requested, double minTime,
-                int minPitch, int maxPitch) noexcept {
+                int minPitch, int maxPitch, double maxTime) noexcept {
     if (!b.count) return false;
-    const auto result = clampMove(b, requested, minTime, minPitch, maxPitch);
+    const auto result = clampMove(b, requested, minTime, minPitch, maxPitch, maxTime);
     return result.time == requested.time && result.pitch == requested.pitch;
 }
 double clampResize(const GroupBounds& b, double requested, double minimumLength) noexcept {
