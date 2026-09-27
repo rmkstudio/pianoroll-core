@@ -10,6 +10,7 @@ struct ActionNote {
     int pitch = 60, velocity = 100, source = 0;
     std::size_t originalIndex = noIndex;
     bool selected = false, editable = true, keySwitch = false;
+    bool muted = false;
     // A generated note inherits other fields from originalIndex, but needs a new ID.
     bool generated = false;
 };
