@@ -14,3 +14,8 @@ target_compile_definitions(PianoRollCommandUIChecks PRIVATE JUCE_WEB_BROWSER=0 J
 target_link_libraries(PianoRollCommandUIChecks PRIVATE PianoRollCore::CommandUI)
 enable_testing()
 add_test(NAME PianoRollCommandUIChecks COMMAND PianoRollCommandUIChecks "${CMAKE_CURRENT_BINARY_DIR}/test-output")
+juce_add_console_app(PianoRollViewChecks VERSION "${_piano_core_version}"
+  PRODUCT_NAME "Piano roll view checks")
+target_sources(PianoRollViewChecks PRIVATE PianoRollViewTests.cpp)
+target_link_libraries(PianoRollViewChecks PRIVATE PianoRollCore::View)
+add_test(NAME PianoRollViewChecks COMMAND PianoRollViewChecks)

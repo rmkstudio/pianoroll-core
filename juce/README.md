@@ -42,3 +42,41 @@ the snapshot. Velocity lanes normally disable time editing.
 The command interface uses no timer, global key hook, worker, or audio callback.
 It runs when opened, when a control is edited, or when a command is executed.
 `tests/CMakeLists.txt` builds standalone real-control checks with JUCE 7.
+
+## Piano-roll view (0.4.0)
+
+Link `PianoRollCore::View` and include `PianoRollCore/PianoRollView.h`.
+`PianoRollView` is a `juce::Component` that draws the ruler, keys, notes,
+velocity lane, controller lane, playhead, loop and hover feedback, and runs
+every mouse gesture: pencil, select/marquee, move, resize, Shift copy, erase,
+velocity stroke, controller stroke, middle-button and wheel navigation, ruler
+seek/loop and lane boundaries. It also owns the generic toolbar (undo/redo,
+tool, snap, fit selection, actions, transform, view menu, transport, clock,
+scroll bar).
+
+The product implements `PianoRollHost`:
+
+- It supplies notes by index as `ViewNote` (start, length, pitch, velocity,
+  group, channel, editable), selection, group scope, the controller lane
+  (`LanePoint`), transport position and loop. Times use the product's unit;
+  `roundTime` applies the product's final rounding.
+- It receives each draft edit (`moveNote`, `setNoteLength`, `createNote`,
+  `appendBaselineCopy`, `eraseNote`, `setNoteVelocity`, controller strokes and
+  selection changes). `beginEdit` captures the product's before-image,
+  `editChanged` marks the draft dirty and `commitEdit` publishes at most once
+  per gesture. The view never keeps a second document or undo stack.
+- `followMovedNotes` lets the product apply its own follow rules after a move;
+  returning false after calling `endGesture()` cancels the gesture.
+- `noteLabels` and `keySwitches` return per-pass lookups so a product index is
+  built once per paint or drag step, not once per note.
+- `viewLayout` defaults to `defaultViewLayout`; product controls (group
+  selector, channel, All, controller, fit, export drag) are placed in
+  `placeProductControls`. `ViewPalette` holds colours, the font and the group
+  colour function.
+
+A product may derive its editor from `PianoRollView` (MIDI Recover does, so its
+existing tests keep sending mouse events to the same component) or own one as
+a child. Do not call host functions from the host's own constructor before the
+view is fully constructed. With "no snap", the step is one time unit; a product
+that uses quarter-note beats as its unit must account for that until a host
+setting exists.

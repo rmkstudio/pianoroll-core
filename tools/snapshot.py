@@ -10,7 +10,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 GENERATED = {"SOURCE-MANIFEST.json", "SHA256SUMS.txt"}
-EXCLUDED_DIRS = {".git", "__pycache__", "build", "dist", ".cache"}
+# Repository CI configuration is not part of the released source snapshot.
+EXCLUDED_DIRS = {".git", ".github", "__pycache__", "build", "dist", ".cache"}
 
 
 def is_build_binary(path):

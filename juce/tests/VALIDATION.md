@@ -1,4 +1,14 @@
-# Command UI validation
+# Shared JUCE UI validation
+
+## 0.4.0 — 2026-10-05
+
+Configured with `-DJUCE_SOURCE_DIR` pointing at JUCE 7.0.12, Release, GCC 13.3,
+run under Xvfb. `PianoRollViewChecks` passed **29 checks** using a minimal
+`PianoRollHost` and the real `PianoRollView` mouse handlers (see the module
+`VALIDATION.md` for the list). `PianoRollCommandUIChecks` passed its 195 checks
+unchanged. Window focus and OS/DAW mouse or keyboard delivery are not validated
+by these headless runs.
+
 
 ## 0.3.1 — current run, 2026-09-21
 

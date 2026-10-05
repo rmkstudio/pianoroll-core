@@ -13,7 +13,7 @@
 
 namespace pianoroll {
 // Release version source; CMake and tools/snapshot.py read this declaration.
-inline constexpr const char* version = "0.3.1";
+inline constexpr const char* version = "0.4.0";
 inline constexpr std::size_t noIndex = std::numeric_limits<std::size_t>::max();
 
 struct Point { double x = 0, y = 0; };

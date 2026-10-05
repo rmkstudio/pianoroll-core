@@ -1,10 +1,10 @@
-# PianoRollCore 0.3.1
+# PianoRollCore 0.4.0
 
 这是 MIDI Lines 和 MIDI Recover 共用的钢琴窗体验模块。0.3.0 在原有导航、播放与编辑规则上增加命令搜索、快捷键设置、原子宏、音符处理、控制曲线变换，以及音高显示和步进输入。插件继续各自安装，公共代码编译在各自 VST3 内，无需另装组件。
 
 用户操作见 `EDITING-GUIDE.zh-CN.md`。命令接入与事务约定见 `COMMANDS.md`；可选 JUCE 面板见 `juce/README.md`。
 
-0.3.1 是限定范围的维护更新：统一未保存宏草稿的关闭流程，提供共用数值解析并规范整数参数，补齐 Insert 与 F17–F24 的 JUCE 键位转换，统一版本来源。具体变化和接入说明见 `RELEASE.md`。
+0.4.0 新增可选的 JUCE 钢琴窗组件 `PianoRollCore::View`：音符、标尺、琴键、力度栏和 CC 栏的绘制，各工具的鼠标手势、光标、视图窗口和通用工具栏都由共享模块提供；插件只通过 `PianoRollHost` 接口提供数据并接收修改，文档、撤销和提交仍由插件负责。纯 C++ 核心的接口和行为没有改变。具体变化和接入说明见 `RELEASE.md`，组件说明见 `juce/README.md`。
 
 ## 现在共同维护哪些功能
 
@@ -25,8 +25,9 @@
 | 力度与 CC 变换框、CC 随乐句 | `AutomationActions` 及可选 `TransformOverlay`，来源明确、区间外状态保护 | 提供当前真实事件、明确轨道／通道／CC 选择，提交一次撤销 |
 | Ctrl+K、快捷键、宏 | `Commands` 注册表、参数、按需查找、键位冲突和宏事务；可选 JUCE 共用面板与设置保存 | 实际可用性、隔离工作副本、文档与撤销发布 |
 | 音高折叠、音阶、演奏法、步进 | `MusicTools` 行映射、音阶成员、明确演奏法映射、和弦松键推进 | 绘制／命中使用同一行表，按来源保存标记，MIDI 输入队列 |
+| 钢琴窗画面、各工具鼠标手势、光标、通用工具栏（0.4.0） | 可选 JUCE 组件 `PianoRollView`（`PianoRollCore::View`），手势按工具拆分，一次手势只经宿主提交一次 | 实现 `PianoRollHost`：按序号提供音符、范围、CC 栏和播放位置，接收草稿修改，保管文档、撤销与提交闸门；放置产品自己的控件 |
 
-**仍由各插件负责：**皮肤与整体布局、分线和 FLP 恢复算法、文档／原始 tick、tempo 校正、MIDI 写出和拖出文件、工程存档、异步任务。公共模块没有合并两款产品，也没有把 Recover 的 CC 改成只读。
+**仍由各插件负责：**皮肤与主窗口布局（钢琴窗内部布局可沿用 `defaultViewLayout` 或由插件提供）、分线和 FLP 恢复算法、文档／原始 tick、tempo 校正、MIDI 写出和拖出文件、工程存档、异步任务。公共模块没有合并两款产品，也没有把 Recover 的 CC 改成只读。
 
 ## 第三个插件怎样复用
 
@@ -58,6 +59,7 @@ view = dragNavigation(gesture, {40, 130}, limits).view;
 - `Commands.h`：稳定命令 ID、参数验证、快捷键、自定义宏及事务回调。
 - `NoteActions.h`：批量音符处理与条件选择，统一由适配器转换拍／tick。
 - `AutomationActions.h`：力度／CC 变换、明确来源的 CC 跟随与边界状态保护。
+- `PianoRollView.h`（JUCE，`PianoRollCore::View`）：`PianoRollView` 组件、`PianoRollHost` 接口、`ViewPalette` 配色、`defaultViewLayout` 布局；手势状态在 `ViewGestures.h`。
 - `MusicTools.h`：音高行映射、音阶成员、演奏法标签与步进和弦。
 
 完整小型编辑适配示例见 `examples/MinimalAdapter.cpp`。`PianoRollCore.h` 是总入口；也可以只包含需要的头。
@@ -86,7 +88,7 @@ ctest --test-dir build --output-on-failure
 
 独立构建包含 6 个测试程序和 2 个示例；作为子目录时默认关闭测试／示例，可通过 `PIANO_ROLL_CORE_BUILD_TESTS`、`PIANO_ROLL_CORE_BUILD_EXAMPLE` 开启。结果与限制见 `VALIDATION.md`，来源与许可见 `NOTICE.md`。
 
-复用共用面板时，先 `add_subdirectory` JUCE，再加入本模块并链接 `PianoRollCore::CommandUI`。已有 `juce::juce_gui_extra` target 时面板默认开启；可显式设置 `PIANO_ROLL_CORE_BUILD_JUCE_UI=OFF` 保持纯核心构建。
+复用共用面板或钢琴窗组件时，先 `add_subdirectory` JUCE，再加入本模块并链接 `PianoRollCore::CommandUI` 和／或 `PianoRollCore::View`。已有 `juce::juce_gui_extra` target 时面板默认开启；可显式设置 `PIANO_ROLL_CORE_BUILD_JUCE_UI=OFF` 保持纯核心构建。
 
 公共目录是唯一修改入口，产品包的 `vendor/PianoRollCore` 为固定发行快照，让下载者能够独立重建。共同功能修一次，两插件各自更新依赖、验证和编译；现有已安装的插件不会自动改变。
 
@@ -94,7 +96,7 @@ ctest --test-dir build --output-on-failure
 python tools/snapshot.py --refresh-manifest
 python tools/snapshot.py --snapshot /path/to/lines/vendor/PianoRollCore
 python tools/snapshot.py --snapshot /path/to/recover/vendor/PianoRollCore
-python tools/snapshot.py --zip /path/to/PianoRollCore-0.3.1-Source.zip
+python tools/snapshot.py --zip /path/to/PianoRollCore-0.4.0-Source.zip
 ```
 
 快照工具需要 Python 3.10+ 标准库。目标已有不同内容时拒绝覆盖；升级前确认旧快照无本地改动后将其移出。发布脚本必须执行 `--verify <vendor路径>`；两产品记录相同 VERSION 和 `source_tree_sha256`。manifest 是内容一致性检查，不是来源签名。工具不打包构建目录、Git、缓存或其它 ZIP。

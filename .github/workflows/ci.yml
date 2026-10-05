@@ -40,3 +40,24 @@ jobs:
             build-ci/python-summary.json
           if-no-files-found: ignore
           retention-days: 7
+
+  juce-ui:
+    name: Linux shared JUCE UI tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Linux build and display tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libasound2-dev libfreetype6-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libgl1-mesa-dev libglu1-mesa-dev xvfb xauth
+      - name: Fetch JUCE 7.0.12
+        run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git "$RUNNER_TEMP/JUCE"
+      - name: Configure shared JUCE UI tests
+        run: cmake -S juce/tests -B build-juce -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_SOURCE_DIR="$RUNNER_TEMP/JUCE"
+      - name: Compile
+        run: cmake --build build-juce --parallel 2
+      - name: Run shared JUCE UI tests
+        run: xvfb-run -a ctest --test-dir build-juce --output-on-failure --no-tests=error --timeout 240

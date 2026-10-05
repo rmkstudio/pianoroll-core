@@ -1,4 +1,20 @@
-# PianoRollCore 0.3.1 validation
+# PianoRollCore 0.4.0 validation
+
+## 0.4.0 — piano-roll view, 2026-10-05
+
+Linux container, GCC 13.3, C++17, CMake Release. Shared JUCE targets built against JUCE 7.0.12 (the copy pinned in MIDI Recover's `vendor/`); Xvfb display.
+
+| Check | Result |
+|---|---|
+| Core CMake build, six CTest groups | PASS: 6/6, unchanged from 0.3.1 (44 core, 80 experience, 54 playback, 181 command/music, 77 note actions, 40 automation) |
+| Shared JUCE targets (`CommandUI`, new `View`) | PASS: compile and link |
+| `PianoRollViewChecks` (new) | PASS: 29 checks with a minimal host through the real mouse handlers: layout and paint, snap/free move, one before-image and one commit per gesture, read-only and sub-threshold drags, resize, Shift copy, rejected follow ending the gesture, pencil creation, path erase, scoped marquee, velocity and controller strokes, navigation without edits, ruler seek/loop, busy host |
+| `PianoRollCommandUIChecks` | PASS: 195 checks, unchanged |
+| Behaviour parity with MIDI Recover 0.7.10 | Established in the product: the view was moved line by line, and Recover's `recover_gesture_replay` (103 scripted gestures) and 118 component/replay images match the pre-move baseline. See Recover `docs/VALIDATION.md` |
+| Version / source snapshot | PASS: `--refresh-manifest`, `--verify .` |
+| Windows DAW, MIDI Lines integration | NOT RUN: Lines adopts the view in a later task |
+
+## Previous: 0.3.1
 
 ## Current maintenance validation — 2026-09-21
 
