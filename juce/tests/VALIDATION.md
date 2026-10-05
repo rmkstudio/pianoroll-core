@@ -1,5 +1,14 @@
 # Shared JUCE UI validation
 
+## 0.5.0 — 2026-10-05
+
+Same harness. `PianoRollViewChecks` passed **401 checks**: the 0.4.0 gesture
+checks unchanged plus the one-row toolbar layout at four widths, draw/select
+buttons, transport commands and icons, and splitters that follow the mouse.
+It now defines `JUCE_MODAL_LOOPS_PERMITTED=1` because `Button::triggerClick` is
+asynchronous and the checks pump the message loop. `PianoRollCommandUIChecks`
+passed its 195 checks unchanged.
+
 ## 0.4.0 — 2026-10-05
 
 Configured with `-DJUCE_SOURCE_DIR` pointing at JUCE 7.0.12, Release, GCC 13.3,

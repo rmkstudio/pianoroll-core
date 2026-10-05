@@ -55,9 +55,12 @@ struct ViewPalette
 struct ViewLayout
 {
     using Rect = juce::Rectangle<int>;
-    Rect undo, redo, tool, snap, fitSelection, actions, transform, view, fit;
-    Rect editTrack, channel, allTracks, controller, drag;
-    Rect ruler, notes, keys, velocity, cc, scroll, play, stop, home, follow, clock;
+    // One toolbar row: transport and clock, history, tools, snap and the edit menu.
+    Rect play, stop, clock, undo, redo, pencil, pointer, snap, edit, follow;
+    // Product slots: fit and expand sit at the toolbar end, the rest on the context row
+    // or in a lane header; a product may leave any of them empty.
+    Rect fit, expand, editTrack, channel, allTracks, controller, drag;
+    Rect ruler, notes, keys, velocity, cc, scroll;
 };
 ViewLayout defaultViewLayout(int width, int height, bool velocity, bool cc, float noteFraction,
                              float velocityFraction);
@@ -155,7 +158,8 @@ class PianoRollHost
     virtual void laneLayoutChanged() = 0;
     virtual void reportMessage(const juce::String&) = 0;
     virtual void invokeCommand(const std::string& id) = 0;
-    virtual void showViewMenu(juce::Component& anchor) = 0;
+    // Product entries appended to the edit menu (view options, audition, solo...).
+    virtual void addEditMenuItems(juce::PopupMenu&) = 0;
     virtual ViewLayout viewLayout(int width, int height, bool velocity, bool cc, float noteFraction,
                                   float velocityFraction) const
     {
@@ -254,7 +258,7 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     void setPaintMode(bool paint);
     bool isPaintMode() const
     {
-        return toolSelect.getSelectedId() == 1;
+        return pencilButton.getToggleState();
     }
     bool gestureActive() const
     {
@@ -303,14 +307,14 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
 
   protected:
     // First toolbar row; the host may also attach tooltips or names.
+    // Buttons carry an "icon" property; a product look-and-feel may draw it instead of the
+    // text. "segment" (first/middle/last) marks buttons drawn as one joined group.
     juce::TextButton undoButton{juce::String::fromUTF8("撤销")},
-        redoButton{juce::String::fromUTF8("重做")},
-        fitSelectionButton{juce::String::fromUTF8("选区")},
-        actionsButton{juce::String::fromUTF8("操作")},
-        transformButton{juce::String::fromUTF8("塑形")}, viewButton{juce::String::fromUTF8("视图")};
-    juce::ComboBox toolSelect, snapSelect;
+        redoButton{juce::String::fromUTF8("重做")}, pencilButton{juce::String::fromUTF8("画笔")},
+        pointerButton{juce::String::fromUTF8("选择")}, editButton{juce::String::fromUTF8("编辑")};
+    juce::ComboBox snapSelect;
     juce::TextButton playButton{juce::String::fromUTF8("播放")},
-        stopButton{juce::String::fromUTF8("停止")}, homeButton{juce::String::fromUTF8("回起点")};
+        stopButton{juce::String::fromUTF8("停止")};
     juce::ToggleButton followButton{juce::String::fromUTF8("跟随")},
         velocityLaneButton{juce::String::fromUTF8("力度栏")},
         ccLaneButton{juce::String::fromUTF8("CC 栏")};
@@ -322,7 +326,7 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     ViewPalette colours;
     double left = 0, span = 768, total = 768;
     float topPitch = 80, row = 12;
-    float noteFraction = .76f, velocityFraction = .12f;
+    float noteFraction = .76f, velocityFraction = .12f, laneBottom = 0;
     bool showVelocity = true, showCC = true;
     juce::Rectangle<float> notesArea, keysArea, rulerArea, velocityArea, ccArea;
     std::vector<int> pitchRows;
@@ -358,6 +362,8 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     void audition(int pitch, int velocity);
     void captureBaseline();
     void updateCursor(juce::Point<float>, juce::ModifierKeys);
+    void showTool(bool paint);
+    void showEditMenu();
 
     // Gestures, one block per tool (PianoRollViewGestures.cpp).
     void beginPan(const juce::MouseEvent&);

@@ -167,11 +167,11 @@ void PianoRollView::mouseDoubleClick(const MouseEvent& e)
         host.editChanged();
         host.commitEdit();
     }
-    else if (hit(e.position, true) < 0 && toolSelect.getSelectedId() == 2)
+    else if (hit(e.position, true) < 0 && !isPaintMode())
     {
-        toolSelect.setSelectedId(1, dontSendNotification);
+        showTool(true);
         mouseDown(e);
-        toolSelect.setSelectedId(2, dontSendNotification);
+        showTool(false);
         host.commitEdit();
     }
     gesture = {};
@@ -252,20 +252,28 @@ void PianoRollView::finishRuler(gesture::Ruler& ruler, const MouseEvent& e)
 }
 void PianoRollView::dragLaneSplit(const gesture::LaneSplit& split, const MouseEvent& e)
 {
-    float usable = jmax(100.f, (float)getHeight() - 132);
+    // Fractions are shares of the lane stack the layout reported, from the top of the
+    // notes to the bottom of the last visible lane. The grab handles sit 9 px below the
+    // notes (velocity) and 12 px below the velocity lane (CC), so the handle stays under
+    // the mouse.
+    const float top = notesArea.getY(), usable = jmax(100.f, laneBottom - top);
     if (split.aboveVelocity)
     {
+        const float above = (e.y - top - 9) / usable;
         if (showCC)
-            noteFraction = jlimit(.25f, .94f - velocityFraction, (e.y - 91.f) / usable);
+            noteFraction = jlimit(.25f, .94f - velocityFraction, above);
         else
-            velocityFraction = jlimit(.06f, .65f, 1.f - (e.y - 91.f) / usable);
+            velocityFraction = jlimit(.06f, .65f, 1.f - above);
     }
-    else if (showVelocity)
-        velocityFraction =
-            jlimit(.06f, jmax(.06f, .94f - noteFraction), (e.y - 94.f) / usable - noteFraction);
     else
-        noteFraction =
-            jlimit(.25f, .94f - velocityFraction, (e.y - 94.f) / usable - velocityFraction);
+    {
+        const float above = (e.y - top - 12) / usable;
+        if (showVelocity)
+            velocityFraction =
+                jlimit(.06f, jmax(.06f, .94f - noteFraction), above - noteFraction);
+        else
+            noteFraction = jlimit(.25f, .94f - velocityFraction, above - velocityFraction);
+    }
     resized();
     repaint();
 }
@@ -286,7 +294,7 @@ bool PianoRollView::beginNoteGesture(const MouseEvent& e)
         eraseAt(std::get<gesture::Erase>(gesture), e.position);
         return false;
     }
-    if (control || (grab < 0 && toolSelect.getSelectedId() == 2))
+    if (control || (grab < 0 && !isPaintMode()))
     {
         if (grab >= 0)
         {
@@ -649,7 +657,7 @@ void PianoRollView::updateCursor(juce::Point<float> point, ModifierKeys mods)
             setMouseCursor(MouseCursor::DraggingHandCursor);
     }
     else
-        setMouseCursor(notesArea.contains(point) ? (toolSelect.getSelectedId() == 1
+        setMouseCursor(notesArea.contains(point) ? (isPaintMode()
                                                         ? pencil
                                                         : MouseCursor(MouseCursor::CrosshairCursor))
                                                  : MouseCursor(MouseCursor::NormalCursor));

@@ -19,6 +19,7 @@ struct Host final : PianoRollHost {
     double lastSeek = -1, loopA = 0, loopB = 0, strokeStart = -1, strokeEnd = -1;
     std::map<double, int> strokePoints;
     bool strokeOpen = false;
+    std::vector<std::string> commands;
     PianoRollView* view = nullptr;
 
     bool hasDocument() const override { return loaded; }
@@ -98,8 +99,8 @@ struct Host final : PianoRollHost {
     void exportSelectedNotes() override {}
     void laneLayoutChanged() override {}
     void reportMessage(const juce::String&) override {}
-    void invokeCommand(const std::string&) override {}
-    void showViewMenu(juce::Component&) override {}
+    void invokeCommand(const std::string& id) override { commands.push_back(id); }
+    void addEditMenuItems(juce::PopupMenu&) override {}
     void viewWillResize() override {}
     void placeProductControls(const ViewLayout&) override {}
 };
@@ -243,6 +244,74 @@ void lanesNavigationAndRuler()
     drag(f.view, {f.view.timeToX(97), ruler}, {f.view.timeToX(290), ruler}, left);
     require(f.host.loopA == 96 && f.host.loopB == 288, "Ruler drag sets a snapped loop");
 }
+juce::Button* button(juce::Component& root, const juce::String& name)
+{
+    for (auto* child : root.getChildren())
+        if (child->getName() == name)
+            return dynamic_cast<juce::Button*>(child);
+    return nullptr;
+}
+void toolbar()
+{
+    using Rect = ViewLayout::Rect;
+    for (int width : {560, 688, 900, 1400})
+    {
+        const auto r = defaultViewLayout(width, 600, true, true, .76f, .12f);
+        const std::vector<Rect> row{r.play, r.stop, r.clock, r.undo, r.redo, r.pencil, r.pointer,
+                                    r.snap, r.edit, r.follow, r.fit, r.expand};
+        const std::vector<Rect> context{r.editTrack, r.channel, r.allTracks, r.drag};
+        for (const auto* group : {&row, &context})
+            for (std::size_t i = 0; i < group->size(); ++i)
+            {
+                const auto a = (*group)[i];
+                if (a.isEmpty())
+                    continue;
+                require(a.getX() >= 0 && a.getRight() <= width, "Toolbar control outside the view");
+                for (std::size_t j = i + 1; j < group->size(); ++j)
+                    require(!a.intersects((*group)[j]), "Toolbar controls overlap");
+            }
+        require(r.clock.getWidth() >= (width >= 688 ? 120 : 0), "Clock keeps room at usual widths");
+        require(r.notes.getY() > r.allTracks.getBottom() && r.scroll.getBottom() <= 600,
+                "Lanes start below the toolbar and end in the view");
+        require(r.controller.getBottom() <= r.cc.getY() && r.controller.getRight() <= r.cc.getX() + 62,
+                "Controller slot sits in the CC lane header");
+    }
+    Fixture f;
+    f.view.setPaintMode(true);
+    require(f.view.isPaintMode(), "Paint mode shown on the draw button");
+    auto* pointer = button(f.view, "Select tool");
+    auto* pencil = button(f.view, "Draw tool");
+    require(pointer && pencil && pencil->getToggleState(), "Tool buttons present");
+    auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil(40); };
+    pointer->triggerClick();
+    pump();
+    require(!f.view.isPaintMode() && pointer->getToggleState() && !pencil->getToggleState(),
+            "Clicking select switches tools exclusively");
+    button(f.view, "Stop")->triggerClick();
+    pump();
+    button(f.view, "Play / pause")->triggerClick();
+    pump();
+    require(f.host.commands.size() == 2 && f.host.commands[0] == "transport.stop" &&
+                f.host.commands[1] == "transport.playPause",
+            "Transport buttons issue their commands");
+    f.view.setTransportState(true, true, "1:00", {});
+    require(button(f.view, "Play / pause")->getProperties()["icon"].toString() == "pause",
+            "Playing shows the pause icon");
+    require(button(f.view, "Home") == nullptr && button(f.view, "menu") != nullptr,
+            "Home button removed; one edit menu");
+}
+void laneSplitFollowsMouse()
+{
+    Fixture f;
+    const float before = f.view.noteArea().getHeight(), split = f.view.velocityLaneBounds().getY() - 10;
+    drag(f.view, {400, split}, {400, split - 40}, left);
+    require(std::abs(f.view.noteArea().getHeight() - (before - 40)) <= 2,
+            "Velocity splitter follows the mouse");
+    const float cc = f.view.controllerLaneBounds().getHeight(), ccSplit = f.view.controllerLaneBounds().getY() - 12;
+    drag(f.view, {400, ccSplit}, {400, ccSplit - 20}, left);
+    require(std::abs(f.view.controllerLaneBounds().getHeight() - (cc + 20)) <= 2,
+            "CC splitter follows the mouse");
+}
 void busyBlocksEdits()
 {
     Fixture f;
@@ -257,7 +326,7 @@ int main()
     try {
         juce::ScopedJuceInitialiser_GUI initialiser;
         geometryAndPaint(); selectionAndMove(); resizeCopyAndFollow(); pencilEraseMarquee();
-        lanesNavigationAndRuler(); busyBlocksEdits();
+        lanesNavigationAndRuler(); busyBlocksEdits(); toolbar(); laneSplitFollowsMouse();
         std::cout << checks << " piano-roll view checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << "FAILED: " << error.what() << '\n'; return 1; }
 }

@@ -41,32 +41,38 @@ ViewLayout defaultViewLayout(int w, int h, bool velocity, bool cc, float nf, flo
 {
     ViewLayout r;
     using R = ViewLayout::Rect;
-    const int g = 6, ch = 28;
-    int x = 0;
-    auto take = [&](int width)
+    const int ch = 28;
+    // Toolbar: transport | clock (flexible) | history | tools | snap | edit ... follow fit expand
+    r.expand = {w - 30, 0, 30, ch};
+    r.fit = {w - 66, 0, 30, ch};
+    r.follow = {w - 102, 0, 30, ch};
+    r.play = {0, 0, 38, ch};
+    r.stop = {38, 0, 38, ch};
+    const int end = r.follow.getX() - 10;
+    const bool compact = end - 86 - 404 < 120;
+    const int tool = compact ? 34 : 64;
+    const int fixed = 30 + 2 + 30 + 10 + 2 * tool + 10 + 108 + 6 + 70;
+    const int clock = jlimit(0, 240, end - 86 - fixed - 10);
+    r.clock = {86, 0, clock, ch};
+    int x = 86 + clock + 10;
+    auto take = [&](int width, int gap)
     {
         R q{x, 0, width, ch};
-        x += width + g;
+        x += width + gap;
         return q;
     };
-    r.undo = take(42);
-    r.redo = take(42);
-    x += 4;
-    r.tool = take(84);
-    r.snap = take(100);
-    x += 4;
-    r.fitSelection = take(48);
-    r.actions = take(58);
-    r.transform = take(58);
-    r.view = take(78);
-    r.fit = {w - 90, 0, 90, ch};
-    const int trackWidth = jmax(120, w - 354), y = 36;
-    r.editTrack = {0, y, trackWidth, ch};
-    r.channel = {trackWidth + g, y, 84, ch};
-    r.allTracks = {trackWidth + 96, y, 50, ch};
-    r.controller = {w - 198, y, 102, ch};
+    r.undo = take(30, 2);
+    r.redo = take(30, 10);
+    r.pencil = take(tool, 0);
+    r.pointer = take(tool, 10);
+    r.snap = take(108, 6);
+    r.edit = take(70, 0);
+    const int y = 36, track = jlimit(120, 240, w - 56 - 6 - 84 - 6 - 120 - 6 - 96);
+    r.editTrack = {56, y, track, ch};
+    r.channel = {r.editTrack.getRight() + 6, y, 84, ch};
+    r.allTracks = {r.channel.getRight() + 6, y, 120, ch};
     r.drag = {w - 90, y, 90, ch};
-    const int start = 92, bottom = h - 50;
+    const int start = 92, bottom = h - 18;
     const int usable = jmax(150, bottom - start);
     int vh = velocity ? jmax(44, roundToInt(usable * vf)) : 0;
     int cch = cc ? jmax(50, roundToInt(usable * jmax(.06f, 1.f - nf - vf))) : 0;
@@ -77,45 +83,66 @@ ViewLayout defaultViewLayout(int w, int h, bool velocity, bool cc, float nf, flo
     if (velocity)
         r.velocity = {58, start + nh + 19, w - 59, jmax(24, vh - 19)};
     if (cc)
+    {
         r.cc = {58, start + nh + vh + 24, w - 59, jmax(24, cch - 24)};
-    r.scroll = {58, h - 43, w - 59, 9};
-    r.play = {0, h - 29, 52, 27};
-    r.stop = {58, h - 29, 52, 27};
-    r.home = {116, h - 29, 65, 27};
-    r.follow = {188, h - 29, 66, 27};
-    r.clock = {258, h - 29, w - 258, 27};
+        r.controller = {0, r.cc.getY() - 23, 120, 22};
+    }
+    r.scroll = {58, h - 11, w - 59, 9};
     return r;
 }
 
 PianoRollView::PianoRollView(PianoRollHost& owner) : host(owner)
 {
-    for (auto* b : {&undoButton, &redoButton, &fitSelectionButton, &actionsButton, &transformButton,
-                    &viewButton, &playButton, &stopButton, &homeButton})
+    for (auto* b : {&undoButton, &redoButton, &playButton, &stopButton})
         b->getProperties().set("quiet", true);
     makeCursors(colours, pencil, copyCursor);
-    addAndMakeVisible(toolSelect);
-    toolSelect.setName("Edit tool");
-    toolSelect.addItem(String::fromUTF8("1  画笔"), 1);
-    toolSelect.addItem(String::fromUTF8("2  选择"), 2);
-    toolSelect.setSelectedId(2);
-    toolSelect.setTooltip(String::fromUTF8("1 画笔 · 2 选择 · Alt 临时取消吸附"));
-    for (auto* b :
-         {&undoButton, &redoButton, &playButton, &stopButton, &homeButton, &fitSelectionButton})
+    const std::pair<Button*, const char*> icons[] = {
+        {&playButton, "play"},       {&stopButton, "stop"},       {&undoButton, "undo"},
+        {&redoButton, "redo"},       {&pencilButton, "pencil"},   {&pointerButton, "pointer"},
+        {&followButton, "follow"}};
+    for (auto [button, icon] : icons)
+        button->getProperties().set("icon", icon);
+    for (auto [button, segment] : std::initializer_list<std::pair<Button*, const char*>>{
+             {&playButton, "first"},
+             {&stopButton, "last"},
+             {&pencilButton, "first"},
+             {&pointerButton, "last"}})
+        button->getProperties().set("segment", segment);
+    pencilButton.setName("Draw tool");
+    pointerButton.setName("Select tool");
+    pencilButton.setTooltip(String::fromUTF8("画笔（1）· Alt 临时取消吸附"));
+    pointerButton.setTooltip(String::fromUTF8("选择（2）· Alt 临时取消吸附"));
+    for (auto* b : {&pencilButton, &pointerButton})
+    {
+        b->setClickingTogglesState(true);
+        b->setRadioGroupId(0x5052);
+        b->onClick = [this]
+        {
+            updateCursor(hover, ModifierKeys::getCurrentModifiersRealtime());
+            repaint();
+        };
+    }
+    pointerButton.setToggleState(true, dontSendNotification);
+    undoButton.setTooltip(String::fromUTF8("撤销（Ctrl+Z）"));
+    redoButton.setTooltip(String::fromUTF8("重做（Ctrl+Shift+Z）"));
+    for (auto* b : {&undoButton, &redoButton, &playButton, &stopButton, &pencilButton,
+                    &pointerButton, &editButton})
     {
         addAndMakeVisible(*b);
         b->setWantsKeyboardFocus(false);
     }
     addAndMakeVisible(snapSelect);
-    snapSelect.addItemList({String::fromUTF8("不吸附"), String::fromUTF8("1/4 音符"),
-                            String::fromUTF8("1/8 音符"), String::fromUTF8("1/16 音符"),
-                            String::fromUTF8("1/32 音符"), String::fromUTF8("八分三连"),
-                            String::fromUTF8("十六分三连")},
+    snapSelect.setName("Snap");
+    snapSelect.addItemList({String::fromUTF8("不吸附"), "1/4", "1/8", "1/16", "1/32",
+                            String::fromUTF8("1/8 三连"), String::fromUTF8("1/16 三连")},
                            1);
     snapSelect.setSelectedId(4);
-    snapSelect.setTooltip(String::fromUTF8("Alt 拖动临时取消吸附"));
+    snapSelect.getProperties().set("prefix", String::fromUTF8("吸附"));
+    snapSelect.setTooltip(String::fromUTF8("吸附网格（音符）· Alt 拖动临时取消吸附"));
     addAndMakeVisible(followButton);
     followButton.setToggleState(true, dontSendNotification);
     followButton.setWantsKeyboardFocus(false);
+    followButton.setTooltip(String::fromUTF8("播放时跟随播放头"));
     followButton.onClick = [this]
     {
         follow.setEnabled(followButton.getToggleState());
@@ -125,38 +152,14 @@ PianoRollView::PianoRollView(PianoRollHost& owner) : host(owner)
     transportLabel.setColour(Label::textColourId, colours.muted);
     playButton.setName("Play / pause");
     stopButton.setName("Stop");
-    homeButton.setName("Home");
     followButton.setName("Follow playhead");
     playButton.setTooltip(String::fromUTF8("空格／Enter：播放或暂停 · 参考钢琴音色"));
-    stopButton.setTooltip(String::fromUTF8("停止回定位点，再按回开头"));
-    toolSelect.onChange = [this]
-    {
-        updateCursor(hover, ModifierKeys::getCurrentModifiersRealtime());
-        repaint();
-    };
-    for (auto* b : {&actionsButton, &transformButton})
-    {
-        addAndMakeVisible(*b);
-        b->setWantsKeyboardFocus(false);
-    }
-    actionsButton.setName("Actions / commands");
-    actionsButton.onClick = [this]
-    {
-        host.invokeCommand("commands.search");
-    };
-    transformButton.setName("Value transform");
-    transformButton.onClick = [this]
-    {
-        host.invokeCommand(host.controller() >= 0 ? "automation.transformBox"
-                                                  : "velocity.transformBox");
-    };
+    stopButton.setTooltip(String::fromUTF8("停止回定位点，再按一次回开头（Home 键直接回开头）"));
     for (auto [button, id] : std::initializer_list<std::pair<Button*, const char*>>{
              {&undoButton, "edit.undo"},
              {&redoButton, "edit.redo"},
              {&playButton, "transport.playPause"},
-             {&stopButton, "transport.stop"},
-             {&homeButton, "transport.home"},
-             {&fitSelectionButton, "view.fitSelection"}})
+             {&stopButton, "transport.stop"}})
         button->onClick = [this, command = std::string(id)]
         {
             host.invokeCommand(command);
@@ -183,12 +186,11 @@ PianoRollView::PianoRollView(PianoRollHost& owner) : host(owner)
         resized();
         repaint();
     };
-    addAndMakeVisible(viewButton);
-    viewButton.setName("menu");
-    viewButton.setWantsKeyboardFocus(false);
-    viewButton.onClick = [this]
+    editButton.setName("menu");
+    editButton.setTooltip(String::fromUTF8("适应选区、命令搜索、数值塑形和视图选项"));
+    editButton.onClick = [this]
     {
-        host.showViewMenu(viewButton);
+        showEditMenu();
     };
     addAndMakeVisible(hscroll);
     hscroll.addListener(this);
@@ -207,7 +209,36 @@ void PianoRollView::setPalette(ViewPalette palette)
 }
 std::vector<Component*> PianoRollView::keyboardControls()
 {
-    return {&toolSelect, &snapSelect};
+    return {&snapSelect};
+}
+void PianoRollView::showTool(bool paint)
+{
+    (paint ? pencilButton : pointerButton).setToggleState(true, dontSendNotification);
+}
+void PianoRollView::showEditMenu()
+{
+    PopupMenu menu;
+    menu.setLookAndFeel(&getLookAndFeel());
+    const bool ready = host.hasDocument() && !host.busy();
+    Component::SafePointer<PianoRollView> safe(this);
+    auto run = [safe](std::string id)
+    {
+        return [safe, id]
+        {
+            if (safe)
+                safe->host.invokeCommand(id);
+        };
+    };
+    menu.addSectionHeader(String::fromUTF8("编辑"));
+    menu.addItem(String::fromUTF8("适应选区"), ready, false, run("view.fitSelection"));
+    PopupMenu::Item search(String::fromUTF8("命令搜索…"));
+    search.setEnabled(ready).setAction(run("commands.search"));
+    search.shortcutKeyDescription = "Ctrl+K";
+    menu.addItem(search);
+    menu.addItem(String::fromUTF8("数值塑形…"), ready, false,
+                 run(host.controller() >= 0 ? "automation.transformBox" : "velocity.transformBox"));
+    host.addEditMenuItems(menu);
+    menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&editButton));
 }
 
 // ---- View window and geometry ----
@@ -445,7 +476,7 @@ void PianoRollView::showControllerLane()
 }
 void PianoRollView::setPaintMode(bool paint)
 {
-    toolSelect.setSelectedId(paint ? 1 : 2, dontSendNotification);
+    showTool(paint);
     updateCursor(hover, ModifierKeys::getCurrentModifiersRealtime());
     repaint();
 }
@@ -453,6 +484,7 @@ void PianoRollView::setTransportState(bool playing, bool canPlay, const String& 
                                       const String& tooltip)
 {
     playButton.setButtonText(playing ? String::fromUTF8("暂停") : String::fromUTF8("播放"));
+    playButton.getProperties().set("icon", playing ? "pause" : "play");
     playButton.setEnabled(canPlay);
     transportLabel.setText(text, dontSendNotification);
     transportLabel.setTooltip(tooltip);
@@ -476,12 +508,10 @@ void PianoRollView::resized()
                                    velocityFraction);
     undoButton.setBounds(r.undo);
     redoButton.setBounds(r.redo);
-    toolSelect.setBounds(r.tool);
+    pencilButton.setBounds(r.pencil);
+    pointerButton.setBounds(r.pointer);
     snapSelect.setBounds(r.snap);
-    fitSelectionButton.setBounds(r.fitSelection);
-    actionsButton.setBounds(r.actions);
-    transformButton.setBounds(r.transform);
-    viewButton.setBounds(r.view);
+    editButton.setBounds(r.edit);
     velocityLaneButton.setVisible(false);
     ccLaneButton.setVisible(false);
     rulerArea = r.ruler.toFloat();
@@ -489,10 +519,12 @@ void PianoRollView::resized()
     keysArea = r.keys.toFloat();
     velocityArea = r.velocity.toFloat();
     ccArea = r.cc.toFloat();
+    laneBottom = showCC && !r.cc.isEmpty()                ? ccArea.getBottom()
+                 : showVelocity && !r.velocity.isEmpty() ? velocityArea.getBottom()
+                                                         : notesArea.getBottom();
     hscroll.setBounds(r.scroll);
     playButton.setBounds(r.play);
     stopButton.setBounds(r.stop);
-    homeButton.setBounds(r.home);
     followButton.setBounds(r.follow);
     transportLabel.setBounds(r.clock);
     host.placeProductControls(r);
@@ -517,9 +549,9 @@ void PianoRollView::paint(Graphics& g)
     const auto& c = colours;
     const double ppq = host.unitsPerQuarter();
     g.fillAll(c.background);
-    // Group the existing controls without surrounding each action with a box.
+    // Thin dividers group transport, history and tools without boxing every action.
     g.setColour(c.line);
-    for (int xx : {toolSelect.getX() - 7, fitSelectionButton.getX() - 7})
+    for (int xx : {undoButton.getX() - 6, pencilButton.getX() - 6})
         g.drawVerticalLine(xx, 6.f, 22.f);
     g.drawHorizontalLine(32, 0.f, (float)getWidth());
     g.setColour(c.panel);
@@ -540,6 +572,25 @@ void PianoRollView::paint(Graphics& g)
     }
     const auto marks = meter.grid(left, left + span, span * 8 / jmax(1.f, notesArea.getWidth()),
                                   2048, snapPolicy().step);
+    // Label every Nth bar (N a power of two) so numbers keep about 34 px apart.
+    int barStep = 1;
+    {
+        float firstBar = -1, barWidth = 0;
+        for (auto mark : marks)
+            if (mark.barStart)
+            {
+                if (firstBar < 0)
+                    firstBar = timeToX(mark.time);
+                else
+                {
+                    barWidth = timeToX(mark.time) - firstBar;
+                    break;
+                }
+            }
+        while (barWidth > 0 && barWidth * barStep < 34 && barStep < 65536)
+            barStep *= 2;
+    }
+    float labelEnd = -1e9f;
     for (auto area : {notesArea, velocityArea, ccArea, rulerArea})
     {
         Graphics::ScopedSaveState guard(g);
@@ -549,7 +600,8 @@ void PianoRollView::paint(Graphics& g)
             auto xx = timeToX(mark.time);
             g.setColour(mark.barStart ? c.line : mark.beatStart ? c.beatLine : c.subdivisionLine);
             g.drawVerticalLine(roundToInt(xx), area.getY(), area.getBottom());
-            if (area == rulerArea && mark.barStart)
+            if (area == rulerArea && mark.barStart &&
+                (mark.signatureChange || (mark.bar - 1) % barStep == 0))
             {
                 String name((int64)mark.bar);
                 if (mark.signatureChange)
@@ -557,7 +609,12 @@ void PianoRollView::paint(Graphics& g)
                     auto pos = meter.positionAt(mark.time);
                     name += "  " + String(pos.numerator) + "/" + String(pos.denominator);
                 }
-                label(g, name, {xx + 4, area.getY(), 80, 18}, 11, c.muted);
+                // A wide label (bar plus signature) may still reach the next one: skip it.
+                if (xx + 4 >= labelEnd + 6)
+                {
+                    label(g, name, {xx + 4, area.getY(), 80, 18}, 11, c.muted);
+                    labelEnd = xx + 4 + c.font(11).getStringWidthFloat(name);
+                }
             }
         }
     }
@@ -638,7 +695,9 @@ void PianoRollView::paint(Graphics& g)
         for (int value : {0, 64, 127})
         {
             auto yy = ccArea.getBottom() - value * ccArea.getHeight() / 127.f;
-            label(g, String(value), {10, yy - 7, 42, 14}, 10, c.muted);
+            // Keep the 0 and 127 labels inside the lane, clear of the lane header.
+            const float labelY = jlimit(ccArea.getY(), ccArea.getBottom() - 14, yy - 7);
+            label(g, String(value), {10, labelY, 42, 14}, 10, c.muted);
             g.setColour(c.line);
             g.drawHorizontalLine(roundToInt(yy), ccArea.getX(), ccArea.getRight());
         }
@@ -684,7 +743,7 @@ void PianoRollView::paint(Graphics& g)
             g.setColour(c.ink);
             g.drawRoundedRectangle(noteRect(host.note((std::size_t)index)), 2, 1.2f);
         }
-        else if (toolSelect.getSelectedId() == 1)
+        else if (isPaintMode())
         {
             ViewNote ghost;
             ghost.start =

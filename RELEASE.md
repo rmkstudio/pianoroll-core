@@ -1,4 +1,27 @@
-# PianoRollCore 0.4.0 — 共享钢琴窗组件
+# PianoRollCore 0.5.0 — 单行工具栏
+
+钢琴窗工具栏按 MIDI Recover 第 4 步的界面方案重排。产品需要更新 vendor 快照、按下面的接口变化调整后重新构建才会采用。
+
+## 改动
+
+- **工具栏合为一行**：播放／停止、时钟、撤销／重做、画笔／选择、吸附、“编辑”菜单、跟随，末尾留出“适应窗口”和“展开”的产品位置。底部的播放行去掉，各栏随之加高。
+  - 画笔和选择从下拉框改为两个并排按钮（`Draw tool` / `Select tool`），1／2 键和右键临时绘制不变。
+  - “选区”“操作”“塑形”“视图”合并为一个“编辑”菜单：适应选区、命令搜索（Ctrl+K）、数值塑形，后面接产品自己的条目。
+  - 去掉“回起点”按钮：连按两次停止或 Home 键（命令 `transport.home`）仍回到开头。
+  - 按钮带 `icon` 属性（play/pause、stop、undo、redo、pencil、pointer、follow），成组按钮带 `segment`（first/last）；产品的 LookAndFeel 可以据此画图标，否则照常显示文字。吸附框带 `prefix` 属性“吸附”，选项缩短为“1/16”等。
+- **标尺**：小节号按可用宽度每 1、2、4… 小节标一次，放不下的标签跳过，缩小后不再挤成一团。
+- **CC 栏数值**：0 和 127 的标签保持在栏内，不被栏头的控件遮住。
+- **栏高分隔条**：按实际布局计算，拖动时把手留在鼠标下。0.4.0 用固定常数，抓住时会先跳约 10 像素、之后比鼠标慢约一成。
+
+## 接口变化（不兼容 0.4.0）
+
+- `ViewLayout`：去掉 `tool`、`fitSelection`、`actions`、`transform`、`view`、`home`；新增 `pencil`、`pointer`、`edit`、`expand`。`controller` 默认放在 CC 栏头左侧。
+- `PianoRollHost::showViewMenu(Component&)` 改为 `addEditMenuItems(PopupMenu&)`：产品把自己的条目（带 action）加进“编辑”菜单。
+- `PianoRollView` 不再有 `toolSelect`、`fitSelectionButton`、`actionsButton`、`transformButton`、`viewButton`、`homeButton`；`keyboardControls()` 只返回吸附框。
+
+验证结果见 `VALIDATION.md` 和 `juce/tests/VALIDATION.md`。
+
+## 上一版：0.4.0 — 共享钢琴窗组件
 
 本次把钢琴窗的“身体”从 MIDI Recover 搬进共享模块：画面、各工具的鼠标手势、光标和通用工具栏。MIDI Lines、MIDI Recover 需要各自更新 vendor 快照、接入后重新构建才会采用；已安装的插件不会自动改变。
 

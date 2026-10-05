@@ -18,4 +18,6 @@ juce_add_console_app(PianoRollViewChecks VERSION "${_piano_core_version}"
   PRODUCT_NAME "Piano roll view checks")
 target_sources(PianoRollViewChecks PRIVATE PianoRollViewTests.cpp)
 target_link_libraries(PianoRollViewChecks PRIVATE PianoRollCore::View)
+# Button::triggerClick is asynchronous; the checks pump the message loop.
+target_compile_definitions(PianoRollViewChecks PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
 add_test(NAME PianoRollViewChecks COMMAND PianoRollViewChecks)

@@ -43,16 +43,18 @@ The command interface uses no timer, global key hook, worker, or audio callback.
 It runs when opened, when a control is edited, or when a command is executed.
 `tests/CMakeLists.txt` builds standalone real-control checks with JUCE 7.
 
-## Piano-roll view (0.4.0)
+## Piano-roll view (0.5.0)
 
 Link `PianoRollCore::View` and include `PianoRollCore/PianoRollView.h`.
 `PianoRollView` is a `juce::Component` that draws the ruler, keys, notes,
 velocity lane, controller lane, playhead, loop and hover feedback, and runs
 every mouse gesture: pencil, select/marquee, move, resize, Shift copy, erase,
 velocity stroke, controller stroke, middle-button and wheel navigation, ruler
-seek/loop and lane boundaries. It also owns the generic toolbar (undo/redo,
-tool, snap, fit selection, actions, transform, view menu, transport, clock,
-scroll bar).
+seek/loop and lane boundaries. It also owns the generic one-row toolbar
+(play/stop, clock, undo/redo, draw/select buttons, snap, the "编辑" edit menu,
+follow) and the scroll bar. Buttons carry an `icon` property and joined ones a
+`segment` property (`first`/`last`); the snap box carries `prefix`. A product
+look-and-feel may draw icons from these, otherwise the button text is shown.
 
 The product implements `PianoRollHost`:
 
@@ -70,9 +72,12 @@ The product implements `PianoRollHost`:
 - `noteLabels` and `keySwitches` return per-pass lookups so a product index is
   built once per paint or drag step, not once per note.
 - `viewLayout` defaults to `defaultViewLayout`; product controls (group
-  selector, channel, All, controller, fit, export drag) are placed in
-  `placeProductControls`. `ViewPalette` holds colours, the font and the group
-  colour function.
+  selector, channel, All, controller, fit, expand, export drag) are placed in
+  `placeProductControls`. A product may leave a slot empty and put the control
+  elsewhere (Recover puts export drag in its editor footer). `ViewPalette`
+  holds colours, the font and the group colour function.
+- `addEditMenuItems` appends the product's own entries (view options, audition,
+  solo...) to the edit menu, each with its own action.
 
 A product may derive its editor from `PianoRollView` (MIDI Recover does, so its
 existing tests keep sending mouse events to the same component) or own one as
