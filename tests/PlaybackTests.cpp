@@ -167,6 +167,8 @@ int main() {
         if(i%17==0) stress.requestSilence();
         if(i%5==0) stress.pause();
     }
+    // The audio thread may not have been scheduled yet; let it render before stopping.
+    while(blocks.load()<8) std::this_thread::yield();
     done=true; audio.join();
     check(blocks>0, "concurrent replacement/seek/solo/restore handoff ran");
     check(realtimeAllocations==0, "render performs zero heap allocations");

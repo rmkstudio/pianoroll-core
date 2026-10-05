@@ -6,7 +6,7 @@ Same container and toolchain as 0.4.0 (GCC 13.3, JUCE 7.0.12, Xvfb).
 
 | Check | Result |
 |---|---|
-| Core CMake build, six CTest groups | PASS: 6/6, unchanged |
+| Core CMake build, six CTest groups | PASS: 6/6. `PianoRollPlaybackTests` fixed: its lock-free stress check could end before the audio thread rendered a block (3 failures in 200 runs under load); it now waits for the audio thread first. 0 failures in 300 sequential and 320 parallel runs. Playback code unchanged |
 | `PianoRollViewChecks` | PASS: 401 checks. New: toolbar and context slots inside the view and non-overlapping at 560, 688, 900 and 1400 px, the clock keeps at least 120 px from 688 px, controller slot in the CC lane header; draw/select buttons exclusive; play/stop issue their commands and playing shows the pause icon; no Home button, one edit menu; velocity and CC splitters move by the dragged distance (±2 px). The 0.4.0 gesture checks pass unchanged |
 | `PianoRollCommandUIChecks` | PASS: 195 checks, unchanged |
 | In MIDI Recover | Toolbar, lanes and ruler reviewed in Recover's editor screenshots; Recover's `recover_gesture_replay` golden regenerated for the new layout after a field-by-field review (see Recover `docs/VALIDATION.md`) |
