@@ -271,7 +271,7 @@ void localFontChecks()
     search(panel, u8"命令");
     auto& query = control<juce::TextEditor>(panel, "command.search");
     require(query.getText() == juce::String::fromUTF8(u8"命令") &&
-            control<juce::ListBox>(panel, "command.results").getNumRows() == 1,
+            control<juce::ListBox>(panel, "command.results").getListBoxModel()->getNumRows() == 1,
             "UTF-8 font fixture search selects its real parameterized command");
     const auto originalFace = query.getFont().getTypefacePtr();
     require(originalFace != first.face, "panel initially has the unchanged default typeface");
