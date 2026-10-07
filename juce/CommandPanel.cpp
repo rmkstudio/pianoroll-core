@@ -291,8 +291,13 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
             }
         };
         upStep.onClick = [this] { moveStep(-1); }; downStep.onClick = [this] { moveStep(1); };
+        if (!stepCommands.empty()) {
+            // Complete default initialization before loading a saved step. An
+            // asynchronous ComboBox callback would replace its saved arguments.
+            stepChoice.setSelectedId(1, juce::dontSendNotification);
+            loadStepParameters();
+        }
         refreshMacros(); if (!macroIds.empty()) loadMacro(1);
-        if (!stepCommands.empty()) stepChoice.setSelectedId(1);
         show(Page::search);
     }
     ~Impl() override
@@ -459,7 +464,11 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
             if (const auto* macro = dispatcher.findMacro(macroIds[static_cast<std::size_t>(selected - 1)])) draft = *macro;
         macroChoice.setSelectedId(selected, juce::dontSendNotification);
         macroName.setText(juce::String(draft.name), false); loadingMacro = false; macroDirty = false;
-        steps.updateContent(); steps.selectRow(draft.steps.empty() ? -1 : 0); updateMacroButtons();
+        steps.updateContent();
+        // Another macro can have the same selected row. Force the row callback
+        // to load this draft's command and arguments rather than the old form.
+        steps.deselectAllRows();
+        steps.selectRow(draft.steps.empty() ? -1 : 0); updateMacroButtons();
     }
     void updateMacroButtons()
     {

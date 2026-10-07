@@ -176,6 +176,63 @@ void closeAndKeyChecks()
     }
 }
 
+
+void configuredMacroChecks()
+{
+    auto commands = registry(); Host host; CommandConfiguration config;
+    CommandDispatcher dispatcher(commands, config, host);
+    require(dispatcher.upsertMacro({"macro.loaded.velocity", u8"中文宏",
+        {{"note.velocity", {{"delta", "-23"}}}}}).ok,
+        "configured macro fixture stores non-default velocity arguments");
+    require(dispatcher.upsertMacro({"macro.loaded.pitch", "Pitch macro",
+        {{"note.pitch", {{"delta", "7"}}}}}).ok,
+        "second configured macro fixture stores another command");
+    int saves = 0;
+    CommandPanel panel(dispatcher, [&] { ++saves; return juce::Result::ok(); }, [] {});
+    auto& macros = control<juce::ComboBox>(panel, "macro.choice");
+    auto& command = control<juce::ComboBox>(panel, "macro.command");
+    auto& rows = control<juce::ListBox>(panel, "macro.steps");
+    const auto requireStep = [&](int macro, int selectedCommand, const char* name, const char* value) {
+        require(macros.getSelectedId() == macro &&
+                control<juce::TextEditor>(panel, "macro.name").getText() == juce::String::fromUTF8(name),
+                "loaded macro name and choice belong to the configured draft");
+        require(rows.getListBoxModel()->getNumRows() == 1 && rows.getSelectedRow() == 0 &&
+                command.getSelectedId() == selectedCommand,
+                "loaded macro keeps its actual step command and selected row");
+        auto* form = find(panel, "macro.parameters");
+        require(form != nullptr && control<juce::TextEditor>(*form, "parameter.delta").getText() == value,
+                "loaded macro parameter form keeps its non-default saved arguments");
+    };
+    // Loading must be complete on return, then remain stable after async callbacks.
+    requireStep(1, 2, u8"中文宏", "-23");
+    panel.showPage(CommandPanel::Page::macros);
+    requireStep(1, 2, u8"中文宏", "-23");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+    requireStep(1, 2, u8"中文宏", "-23");
+    require(command.isVisible() && control<juce::TextEditor>(panel, "macro.name").isVisible(),
+            "configured macro is shown through actual visible controls");
+    // The first row stays selected when switching macros, so selection alone
+    // must not prevent the new draft's different command and arguments loading.
+    macros.setSelectedId(2, juce::sendNotificationSync);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+    requireStep(2, 1, "Pitch macro", "7");
+    macros.setSelectedId(1, juce::sendNotificationSync);
+    panel.showPage(CommandPanel::Page::search);
+    panel.showPage(CommandPanel::Page::macros);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+    requireStep(1, 2, u8"中文宏", "-23");
+    click(panel, "macro.updateStep"); click(panel, "macro.save");
+    require(config.macros.size() == 2 && config.macros[0].steps.size() == 1 &&
+            config.macros[0].steps[0].id == "note.velocity" &&
+            config.macros[0].steps[0].arguments.at("delta") == "-23" && saves == 1,
+            "updating an untouched loaded step preserves its command and saved arguments");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+    requireStep(1, 2, u8"中文宏", "-23");
+    click(panel, "macro.run");
+    require(host.velocity == 77 && host.pitch == 60 && host.commits == 1,
+            "loaded macro runs its saved arguments in exactly one transaction");
+}
+
 struct FontLook final : juce::LookAndFeel_V4 {
     juce::Typeface::Ptr face;
     explicit FontLook(bool alternate)
@@ -417,7 +474,7 @@ int main(int argc, char** argv)
     try {
         juce::ScopedJuceInitialiser_GUI initialiser;
         auto output = argc > 1 ? juce::File(argv[1]) : juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("piano-command-ui-checks");
-        output.createDirectory(); panelChecks(output); closeAndKeyChecks(); localFontChecks(); preferenceChecks(output); transformChecks();
+        output.createDirectory(); panelChecks(output); closeAndKeyChecks(); configuredMacroChecks(); localFontChecks(); preferenceChecks(output); transformChecks();
         std::cout << checks << " command UI, preference and gesture checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << "FAILED: " << error.what() << '\n'; return 1; }
 }

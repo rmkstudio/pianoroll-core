@@ -10,7 +10,7 @@ get_directory_property(_piano_core_version DIRECTORY ../.. DEFINITION PROJECT_VE
 juce_add_console_app(PianoRollCommandUIChecks VERSION "${_piano_core_version}"
   PRODUCT_NAME "Piano roll command UI checks")
 target_sources(PianoRollCommandUIChecks PRIVATE CommandUITests.cpp)
-target_compile_definitions(PianoRollCommandUIChecks PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(PianoRollCommandUIChecks PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(PianoRollCommandUIChecks PRIVATE PianoRollCore::CommandUI)
 enable_testing()
 add_test(NAME PianoRollCommandUIChecks COMMAND PianoRollCommandUIChecks "${CMAKE_CURRENT_BINARY_DIR}/test-output")
