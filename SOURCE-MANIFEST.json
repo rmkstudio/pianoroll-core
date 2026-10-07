@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "PianoRollCore",
   "version": "0.5.2",
-  "source_tree_sha256": "d45eb20a8ef6144cf9505a0d41309473e9c77938b489a42be9fc3aae35632f0f",
+  "source_tree_sha256": "027757e3e0a7b5785e2de50f0a912a6eae0c16f02a790e9aaaee8482d19a4e8e",
   "source_tree_hash_definition": "SHA256 of UTF-8 SHA256SUMS.txt, sorted relative paths, LF newlines",
   "files": {
     "CMakeLists.txt": "193ba3aec87e3196de63297a4686f3865d04ad4df31b3591c0ba3897416f7cb4",
@@ -38,7 +38,7 @@
     "juce/include/PianoRollCore/TransformOverlay.h": "4ddf07ce33fba8623091fb920c7f7b4594ad48b412f2a68c0eaf98a5c38cb7ab",
     "juce/include/PianoRollCore/ViewGestures.h": "e4dfbfcfa9e2121a964803ecf17313581450dfaae326a56942b3e02ef3b4eabf",
     "juce/tests/CMakeLists.txt": "7143e855af8ccebf6ebe418f076cfc4faed84755d862686687ebc2cbbb4f9417",
-    "juce/tests/CommandUITests.cpp": "130d2b070e2910f48779794e789746209efc339ec50d4514d2f7d8d7f1c4e235",
+    "juce/tests/CommandUITests.cpp": "5d2aa84399786e5983187b6d28b3abdf71583c301cf1602b9cc84245f2aa2171",
     "juce/tests/PianoRollViewTests.cpp": "71656126b69b67bebb0606ee728f07ca4c4e5c05558069c7d5bcb07b529f9050",
     "juce/tests/VALIDATION.md": "194217ecfbec69b19a1c888d60db49c7ff1dbe62d5ca375539690a9dcde0f96c",
     "src/AutomationActions.cpp": "c715ee1faf648f8c83ffccfa2741549c997af31a48a29bd4f9764befdb010212",

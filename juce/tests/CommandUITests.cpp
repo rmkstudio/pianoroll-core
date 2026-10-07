@@ -273,8 +273,13 @@ void localFontChecks()
     require(query.getText() == juce::String::fromUTF8(u8"命令") &&
             control<juce::ListBox>(panel, "command.results").getListBoxModel()->getNumRows() == 1,
             "UTF-8 font fixture search selects its real parameterized command");
-    const auto originalFace = query.getFont().getTypefacePtr();
-    require(originalFace != first.face, "panel initially has the unchanged default typeface");
+    const auto originalFont = query.getFont();
+    const auto originalFace = originalFont.getTypefacePtr();
+    const auto originalBounds = query.getLocalBounds();
+    const auto originalRaster = query.createComponentSnapshot(originalBounds);
+    auto* const defaultLook = &juce::LookAndFeel::getDefaultLookAndFeel();
+    require(originalFace != first.face && &panel.getLookAndFeel() == defaultLook &&
+            !query.hasKeyboardFocus(true), "panel initially has the unchanged default typeface without a caret");
     parent.setLookAndFeel(&first);
     parent.addAndMakeVisible(panel);
     require(query.getFont().getTypefacePtr() == first.face, "late attachment rebinds an existing search editor font");
@@ -323,7 +328,40 @@ void localFontChecks()
     requireFormFonts(*find(panel, "command.parameters"), second.face);
     requireRowFont(control<juce::ListBox>(panel, "command.results"), second, false);
     parent.removeChildComponent(&panel);
-    require(query.getFont().getTypefacePtr() == originalFace, "detaching the panel restores the default typeface");
+    const auto restoredFont = query.getFont();
+    const auto restoredFace = restoredFont.getTypefacePtr();
+    const auto defaultFace = defaultLook->getTypefaceForFont(juce::Font(originalFont.getHeight()));
+    const auto glyphsFor = [](const juce::Typeface::Ptr& face) {
+        juce::Array<int> glyphs;
+        juce::Array<float> offsets;
+        face->getGlyphPositions(juce::String::fromUTF8(u8"A中"), glyphs, offsets);
+        return glyphs;
+    };
+    const auto describe = [&](const char* stage, const juce::Typeface::Ptr& face) {
+        std::cout << "Default font " << stage << ": " << face->getName().toStdString()
+                  << " / " << face->getStyle().toStdString() << "; glyphs";
+        for (const auto glyph : glyphsFor(face)) std::cout << ' ' << glyph;
+        std::cout << '\n';
+    };
+    describe("before attachment", originalFace);
+    describe("after detachment", restoredFace);
+    describe("current LookAndFeel", defaultFace);
+    // System typefaces may be newly allocated on every LookAndFeel request.
+    // Check the default font's identity by family/style, glyphs and real rendering.
+    require(&panel.getLookAndFeel() == defaultLook && restoredFace != first.face &&
+            restoredFace != second.face && restoredFace->getName() == originalFace->getName() &&
+            restoredFace->getStyle() == originalFace->getStyle() &&
+            restoredFace->getName() == defaultFace->getName() &&
+            restoredFace->getStyle() == defaultFace->getStyle() &&
+            restoredFont.getHeight() == originalFont.getHeight() &&
+            glyphsFor(restoredFace) == glyphsFor(originalFace) &&
+            glyphsFor(restoredFace) == glyphsFor(defaultFace),
+            "detaching the panel restores the default typeface semantics");
+    require(query.getLocalBounds() == originalBounds && !query.hasKeyboardFocus(true),
+            "default-font raster comparison keeps the original bounds and has no caret");
+    const auto restoredRaster = query.createComponentSnapshot(query.getLocalBounds());
+    require(pixelsEqual(originalRaster, restoredRaster, originalBounds),
+            "detaching the panel restores already populated default-font glyph rendering");
     parent.setLookAndFeel(nullptr);
 }
 
