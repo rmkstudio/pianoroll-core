@@ -24,7 +24,7 @@ template <typename T> T& control(juce::Component& root, const char* id)
 void click(juce::Component& root, const char* id)
 { auto& button = control<juce::TextButton>(root, id); require(button.isEnabled(), id); button.onClick(); }
 void search(CommandPanel& panel, const char* query)
-{ panel.setSearchText(query); control<juce::TextEditor>(panel, "command.search").onTextChange(); }
+{ panel.setSearchText(juce::String::fromUTF8(query)); control<juce::TextEditor>(panel, "command.search").onTextChange(); }
 struct Host final : CommandHost {
     int pitch = 60, velocity = 100, commits = 0, stagedPitch = 0, stagedVelocity = 0;
     bool transaction = false;
@@ -262,13 +262,17 @@ void localFontChecks()
     FontLook first(false), second(true);
     juce::Component parent;
     CommandRegistry commands;
-    commands.add({"font.command", u8"命令", u8"分类", "", {},
-        {{"text", u8"参数", u8"中文", ParameterType::text, 0, 0, {}}}, true});
+    require(commands.add({"font.command", u8"命令", u8"分类", "", {},
+        {{"text", u8"参数", u8"中文", ParameterType::text, 0, 0, {}}}, true}).ok,
+        "Chinese font fixture has a valid command and parameter schema");
     Host host; CommandConfiguration config; CommandDispatcher dispatcher(commands, config, host);
     // Real product order: the panel and its initial form exist before attachment.
     CommandPanel panel(dispatcher, [] { return juce::Result::ok(); }, [] {});
     search(panel, u8"命令");
     auto& query = control<juce::TextEditor>(panel, "command.search");
+    require(query.getText() == juce::String::fromUTF8(u8"命令") &&
+            control<juce::ListBox>(panel, "command.results").getNumRows() == 1,
+            "UTF-8 font fixture search selects its real parameterized command");
     const auto originalFace = query.getFont().getTypefacePtr();
     require(originalFace != first.face, "panel initially has the unchanged default typeface");
     parent.setLookAndFeel(&first);
