@@ -1,4 +1,15 @@
-# PianoRollCore 0.5.0 validation
+# PianoRollCore validation
+
+## 0.5.2 candidate — sustained audition, 2026-10-06
+
+Independent source branch `codex/preview-sustain-fix`, based on `b27c915`. GCC 14.2, C++17, Linux; no Windows/DAW listening or MIDI Lines adoption claimed.
+
+- Core CMake Release: 6/6 CTest groups pass. Playback: 85/85 checks pass; ASAN/UBSAN also 85/85 (leak sanitizer disabled in this container).
+- New regressions first fail on the old engine: no tail decay, resurrected tails on seek/loop/resume, and dropped new notes at full polyphony. Fixed engine covers 44.1/48/96 kHz decay, continuous recycling, held-key preservation, block-size invariance, 5 ms stealing fade, 3,000 simultaneous starts, table bounds and invalid-rate fallback. Existing waveform tolerance, source isolation, transport lifecycle, concurrent publishing and zero render allocation/free checks remain intact.
+- Independent JUCE command/view suites: 2/2 CTest groups pass.
+- Same synthetic workload, old/fixed alternating three runs, GCC -O3, 48 kHz / 256 samples, thread CPU time, no concurrent builds. At seconds 4–5 all sustained voices are still active: median one-core usage 64 voices 18.55% → 2.56%; 256 voices 72.47% → 11.28%. At seconds 28–29 the old 256-voice RMS remains 0.482, fixed tails are silent. Both are silent after pedal release. These are Linux synthetic measurements, not the user's FL CPU meter.
+- Probe schedule uses staggered 30 ms keys and 30-second pedals, with independent sources to avoid same-pitch retrigger truncation. MIDI schedule endpoints remain identical; sound envelopes intentionally differ. Original user MIDI was unavailable.
+- Raw probes, logs and PCM evidence are outside the source snapshot under `/workspace/midi-recover-sustain-fix` and `/workspace/midi-recover-sustain-review`.
 
 ## 0.5.0 — one-row toolbar, 2026-10-05
 

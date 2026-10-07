@@ -1,3 +1,29 @@
+# 0.5.2 candidate — sustained audition tails
+
+Based on the local 0.5.1 candidate commit `b27c915`, on `codex/preview-sustain-fix`. Not merged or tagged; remote core publication remains pending.
+
+- The reference synth now distinguishes key release from CC64 extension. Only pedal-held, released keys decay (-60 dB in six seconds, recycled below -80 dB). A long physically held key retains the existing envelope. Seek/resume/loop chase uses elapsed tail age, so exhausted tails cannot restart at full volume.
+- `PlaybackNote::keyEnd` is derived by `makePlaybackSchedule`; adapters still supply unextended `end`. This addition requires recompilation. Musical schedule endpoints, source-isolated pedal/retrigger handling and serialized MIDI data are unchanged.
+- A prebuilt interpolated waveform table replaces three sine calls per voice/sample; cached pitch/controller gains and compact active voices reduce render cost. The existing dry-waveform regression tolerance remains unchanged.
+- At the 256-voice limit, new keys replace released/quiet/old voices with a bounded 5 ms fade instead of being silently dropped. The audio callback uses fixed storage, no heap allocations or reclamation.
+
+This is a lightweight reference sound, not acoustic piano modeling. Windows/DAW listening and MIDI Lines adoption remain unverified. See VALIDATION.md for measured coverage.
+
+---
+
+# 0.5.1 candidate — view cost and fractional-time contract
+
+Based on `codex/pianoroll-view-0.5`; work is on `codex/view-optimization`, not merged or tagged.
+
+- Paint reads notes once, resolves group membership once per group, reuses visible notes for velocity and hover, and skips hidden lane work.
+- Optional `controllerLaneRange(start, end)` lets indexed hosts provide only visible steps (including preceding/following boundary points); the existing full-lane fallback remains available.
+- `minimumNoteLength()` makes host time resolution explicit (default one tick; beat-based hosts override it). Snap fractions, free movement and resizing respect that resolution.
+- Playback, document mutation and serialized music contracts are unchanged.
+
+Validation: JUCE command and view CTest both pass under Linux/Xvfb, including fractional beat resizing, all snap divisions, hidden CC access and per-paint read bounds. Windows/DAW and MIDI Lines integration have not run.
+
+---
+
 # PianoRollCore 0.5.0 — 单行工具栏
 
 钢琴窗工具栏按 MIDI Recover 第 4 步的界面方案重排。产品需要更新 vendor 快照、按下面的接口变化调整后重新构建才会采用。

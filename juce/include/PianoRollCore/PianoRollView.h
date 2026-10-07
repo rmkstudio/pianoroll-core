@@ -78,6 +78,8 @@ class PianoRollHost
     virtual double maximumTime() const = 0;
     // The product's final time rounding (Recover: JUCE roundToInt to ticks).
     virtual double roundTime(double) const = 0;
+    // Tick hosts retain a one-tick minimum; fractional-time hosts override this.
+    virtual double minimumNoteLength() const { return 1; }
 
     // Notes, by index into the product's current draft.
     virtual std::size_t noteCount() const = 0;
@@ -97,6 +99,12 @@ class PianoRollHost
     virtual int controller() const = 0;
     virtual int channel() const = 0;
     virtual std::vector<LanePoint> controllerLane() const = 0;
+    // Include the preceding step and the first following point so clipping preserves edges.
+    // Hosts with indexed lanes can avoid materializing the complete lane on every paint.
+    virtual std::vector<LanePoint> controllerLaneRange(double, double) const
+    {
+        return controllerLane();
+    }
     virtual double playheadTime() const = 0;
     // Returns false when no loop is set.
     virtual bool loopRange(double& start, double& end) const = 0;
@@ -322,6 +330,14 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     juce::ScrollBar hscroll{false};
 
   private:
+    struct PaintedNote
+    {
+        std::size_t index;
+        ViewNote note;
+        juce::Rectangle<float> bounds;
+        bool foreground, selected;
+    };
+    std::vector<PaintedNote> paintedNotes;
     PianoRollHost& host;
     ViewPalette colours;
     double left = 0, span = 768, total = 768;

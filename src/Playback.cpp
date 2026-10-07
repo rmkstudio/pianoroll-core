@@ -13,6 +13,11 @@ static_assert(std::atomic<const void*>::is_always_lock_free &&
               std::atomic<double>::is_always_lock_free &&
               std::atomic<bool>::is_always_lock_free,
               "Playback requires lock-free pointer, double and 64-bit atomics.");
+// Only released keys sustained by CC64 decay: -60 dB in six seconds,
+// recycled below -80 dB. Held keys and MIDI schedule endpoints stay intact.
+constexpr double tailDecay = 1.151292546497023; // log(1000) / 6
+constexpr double tailFloor = .0001;
+constexpr std::size_t waveSize = 8192;
 constexpr double twoPi = 6.283185307179586476925286766559;
 int laneIndex(int cc) noexcept { return cc == 7 ? 0 : cc == 11 ? 1 : cc == 10 ? 2 : -1; }
 bool finiteTime(double t) noexcept { return std::isfinite(t) && t >= 0; }
@@ -60,6 +65,7 @@ std::shared_ptr<const PlaybackSchedule> makePlaybackSchedule(
         }
     }
     for (auto& n : notes) {
+        n.keyEnd = n.end;
         const auto p = pedals.find(n.source);
         if (p == pedals.end()) continue;
         const auto& lane = p->second;
@@ -110,10 +116,59 @@ struct PlaybackEngine::Impl {
     struct Tone {
         bool active = false;
         int pitch = 0, group = 0, source = 0, volume = 127, expression = 127, pan = 64;
-        double phase = 0, step = 0, off = 0;
-        float level = 0, env = 0;
+        double phase = 0, step = 0, off = 0, keyOff = 0, tail = 1;
+        std::uint64_t serial = 0;
+        float level = 0, env = 0, gain = 1, leftGain = 1, rightGain = 1;
     };
-    std::array<Tone, 256> tones{};
+    struct Voice { Tone tone, fade; int fadeLeft = 0; };
+    std::array<Voice, 256> voices{};
+    std::size_t voiceCount = 0;
+    std::uint64_t voiceSerial = 0;
+    std::array<float, waveSize + 1> waveform{};
+    std::array<double, 128> pitchSteps{};
+    double tailStep = 1;
+    int fadeSamples = 1;
+
+    Impl() {
+        // Constructed off the audio thread; no lazy initialization in render().
+        for (std::size_t i = 0; i <= waveSize; ++i) {
+            const double phase = twoPi * double(i) / double(waveSize);
+            waveform[i] = float(std::sin(phase) + .18*std::sin(phase*2) + .05*std::sin(phase*3));
+        }
+        prepareSteps();
+    }
+    void prepareSteps() noexcept {
+        for (std::size_t i = 0; i < pitchSteps.size(); ++i)
+            pitchSteps[i] = std::fmod(twoPi * 440 * std::pow(2., (double(i)-69)/12.) / rate, twoPi);
+        tailStep = std::exp(-tailDecay / rate);
+        fadeSamples = std::max(1, int(std::min(rate * .005, 1000000.)));
+    }
+    float wave(double phase) const noexcept {
+        const double index = phase * (double(waveSize) / twoPi);
+        const auto base = std::min(std::size_t(index), waveSize - 1);
+        const float fraction = float(index - double(base));
+        return waveform[base] + fraction * (waveform[base+1] - waveform[base]);
+    }
+    static void updateGain(Tone& tone) noexcept {
+        tone.gain = (tone.volume / 127.f) * (tone.expression / 127.f);
+        tone.leftGain = tone.pan <= 64 ? 1.f : (127 - tone.pan) / 63.f;
+        tone.rightGain = tone.pan >= 64 ? 1.f : tone.pan / 64.f;
+    }
+    void renderTone(Tone& tone, float scale, float& left, float& right) noexcept {
+        if (!tone.active) return;
+        if (cursor >= tone.keyOff && tone.off > tone.keyOff) {
+            tone.tail *= tailStep;
+            if (tone.tail < tailFloor) { tone.active = false; return; }
+        }
+        if (cursor >= tone.off) tone.env *= .996f;
+        else tone.env += (1 - tone.env) * .008f;
+        if (cursor >= tone.off && tone.env < .0001f) { tone.active = false; return; }
+        const float value = wave(tone.phase) * tone.level * tone.env * tone.gain * float(tone.tail) * scale;
+        left += value * tone.leftGain;
+        right += value * tone.rightGain;
+        tone.phase += tone.step;
+        if (tone.phase >= twoPi) tone.phase -= twoPi;
+    }
     std::atomic<std::uint64_t> auditionRequest{0};
     std::uint64_t auditionSerial = 0, audioAuditionSerial = 0;
     double auditionPhase = 0, auditionStep = 0, auditionAge = 0;
@@ -169,27 +224,53 @@ struct PlaybackEngine::Impl {
         return nullptr;
     }
     void beginTone(const PlaybackNote& n) noexcept {
-        for (auto& tone : tones) if (!tone.active) {
-            tone = {};
-            tone.active = true; tone.pitch = n.pitch; tone.group = n.group; tone.source = n.source;
-            tone.step = twoPi * 440 * std::pow(2.0, (n.pitch - 69) / 12.0) / rate;
-            tone.off = n.end; tone.level = n.velocity / 127.0f * .07f;
-            if (audioSchedule) {
-                const auto& sources = audioSchedule->sources;
-                const auto s = std::lower_bound(sources.begin(), sources.end(), n.source,
-                    [](const PlaybackSource& p, int id) { return p.source < id; });
-                if (s != sources.end() && s->source == n.source) {
-                    tone.volume = valueAt(s->lanes[0], cursor, 127);
-                    tone.expression = valueAt(s->lanes[1], cursor, 127);
-                    tone.pan = valueAt(s->lanes[2], cursor, 64);
-                }
+        const double keyOff = n.keyEnd >= 0 ? n.keyEnd : n.end;
+        const double tail = n.end > keyOff ? std::exp(-tailDecay * std::max(0., cursor-keyOff)) : 1.;
+        if (tail < tailFloor) return; // Seeking/looping must not revive expired tails.
+        std::size_t index = voiceCount;
+        if (voiceCount < voices.size()) voices[voiceCount++] = {};
+        else {
+            // Prefer released tails, then quiet voices, then the oldest key.
+            // Start every new note; never let a full bank drop all new melody.
+            const auto weaker = [&](const Tone& a, const Tone& b) {
+                const bool releasedA = cursor >= a.keyOff, releasedB = cursor >= b.keyOff;
+                if (releasedA != releasedB) return releasedA;
+                const double levelA = a.level * a.tail * a.gain;
+                const double levelB = b.level * b.tail * b.gain;
+                if (levelA != levelB) return levelA < levelB;
+                return a.serial < b.serial;
+            };
+            index = 0;
+            for (std::size_t i=1; i<voiceCount; ++i)
+                if (weaker(voices[i].tone, voices[index].tone)) index = i;
+            auto& voice = voices[index];
+            // A bounded 5 ms fade avoids a discontinuity when stealing a key.
+            // Multiple starts in one sample retain the audible predecessor.
+            if (voice.tone.active && (voice.tone.env > 0 || !voice.fade.active)) {
+                voice.fade = voice.tone;
+                voice.fadeLeft = fadeSamples;
             }
-            return;
         }
-        // Match the original 256-voice reference synth: excess starts are dropped.
+        auto& tone = voices[index].tone;
+        tone = {};
+        tone.active = true; tone.pitch = n.pitch; tone.group = n.group; tone.source = n.source;
+        tone.step = pitchSteps[static_cast<std::size_t>(n.pitch)];
+        tone.off = n.end; tone.keyOff = keyOff; tone.tail = tail; tone.serial = ++voiceSerial;
+        tone.level = n.velocity / 127.0f * .07f;
+        if (audioSchedule) {
+            const auto& sources = audioSchedule->sources;
+            const auto source = std::lower_bound(sources.begin(), sources.end(), n.source,
+                [](const PlaybackSource& p, int id) { return p.source < id; });
+            if (source != sources.end() && source->source == n.source) {
+                tone.volume = valueAt(source->lanes[0], cursor, 127);
+                tone.expression = valueAt(source->lanes[1], cursor, 127);
+                tone.pan = valueAt(source->lanes[2], cursor, 64);
+            }
+        }
+        updateGain(tone);
     }
     void resetAt(double time) noexcept {
-        for (auto& tone : tones) tone = {};
+        voiceCount = 0;
         nextNote = nextControl = 0;
         if (!audioSchedule) return;
         const auto& notes = audioSchedule->notes;
@@ -211,7 +292,7 @@ struct PlaybackEngine::Impl {
         if (serial != audioAuditionSerial) {
             audioAuditionSerial = serial;
             const int pitch = int(command & 255) - 1;
-            auditionStep = twoPi * 440 * std::pow(2.0, (pitch - 69) / 12.0) / rate;
+            auditionStep = pitchSteps[static_cast<std::size_t>(pitch)];
             auditionLevel = float((command >> 8) & 127) / 127 * .1f;
             auditionAge = 0; auditionActive = true;
         }
@@ -223,11 +304,10 @@ struct PlaybackEngine::Impl {
             const bool gate = (held || auditionAge < .12) && auditionAge < 10;
             auditionEnvelope = gate ? auditionEnvelope + (1 - auditionEnvelope) * attack : auditionEnvelope * release;
             if (!gate && auditionEnvelope < .0001f) { auditionEnvelope = 0; auditionActive = false; break; }
-            const float value = float(std::sin(auditionPhase) + .18 * std::sin(auditionPhase * 2) +
-                .05 * std::sin(auditionPhase * 3)) * auditionLevel * auditionEnvelope;
+            const float value = wave(auditionPhase) * auditionLevel * auditionEnvelope;
             for (int c = 0; c < channelCount; ++c) if (channels && channels[c]) channels[c][i] += value;
             auditionPhase += auditionStep;
-            if (auditionPhase > twoPi) auditionPhase -= twoPi;
+            if (auditionPhase >= twoPi) auditionPhase -= twoPi;
             auditionAge += 1 / rate;
         }
     }
@@ -237,11 +317,12 @@ PlaybackEngine::PlaybackEngine() : impl(std::make_unique<Impl>()) { impl->publis
 PlaybackEngine::~PlaybackEngine() = default;
 void PlaybackEngine::prepare(double sampleRate) {
     auto& p = *impl;
-    p.rate = std::isfinite(sampleRate) && sampleRate > 0 ? sampleRate : 44100;
+    p.rate = std::isfinite(sampleRate) && sampleRate >= 1 ? sampleRate : 44100;
     p.auditionActive = false; p.audioAuditionSerial = 0; p.auditionEnvelope = 0; p.auditionPhase = 0;
     // The host has stopped render(). Its last hazard still owns audioSchedule,
     // so recalculating voice steps is safe even if the message thread publishes.
     // Do not touch desired controls here: prepare can be a separate host thread.
+    p.prepareSteps();
     p.resetAt(p.cursor);
     p.deviceSuspended.store(false);
 }
@@ -328,14 +409,14 @@ void PlaybackEngine::render(float* const* channels, int channelCount, int count)
     if (count <= 0 || channelCount < 0) return;
     auto& p = *impl;
     if (p.deviceSuspended.load()) {
-        for (auto& tone : p.tones) tone = {};
+        p.voiceCount = 0;
         return;
     }
     const auto* control = p.acquire();
     if (!control) return;
     if (control->resumeEpoch != p.silenceEpoch.load()) {
         p.playing = false;
-        for (auto& tone : p.tones) tone = {};
+        p.voiceCount = 0;
         p.auditionActive = false; p.audioAuditionSerial = 0; p.auditionEnvelope = 0;
         p.report();
         return;
@@ -358,10 +439,15 @@ void PlaybackEngine::render(float* const* channels, int channelCount, int count)
         while (p.nextControl < controls.size() && controls[p.nextControl].time <= p.cursor) {
             const auto& c = controls[p.nextControl++];
             if (laneIndex(c.controller) < 0) continue;
-            for (auto& tone : p.tones) if (tone.active && tone.source == c.source) {
-                if (c.controller == 7) tone.volume = c.value;
-                else if (c.controller == 11) tone.expression = c.value;
-                else tone.pan = c.value;
+            for (std::size_t i=0; i<p.voiceCount; ++i) {
+                const auto apply = [&](Impl::Tone& tone) {
+                    if (!tone.active || tone.source != c.source) return;
+                    if (c.controller == 7) tone.volume = c.value;
+                    else if (c.controller == 11) tone.expression = c.value;
+                    else tone.pan = c.value;
+                    Impl::updateGain(tone);
+                };
+                apply(p.voices[i].tone); apply(p.voices[i].fade);
             }
         }
         while (p.nextNote < notes.size() && notes[p.nextNote].start <= p.cursor) {
@@ -369,17 +455,16 @@ void PlaybackEngine::render(float* const* channels, int channelCount, int count)
             if (n.end > p.cursor && (p.solo < 0 || n.group == p.solo)) p.beginTone(n);
         }
         float left = 0, right = 0;
-        for (auto& tone : p.tones) if (tone.active) {
-            if (p.cursor >= tone.off) tone.env *= .996f;
-            else tone.env += (1 - tone.env) * .008f;
-            if (p.cursor >= tone.off && tone.env < .0001f) { tone.active = false; continue; }
-            const float wave = float(std::sin(tone.phase) + .18 * std::sin(tone.phase * 2) +
-                .05 * std::sin(tone.phase * 3));
-            const float gain = (tone.volume / 127.f) * (tone.expression / 127.f);
-            const float value = wave * tone.level * tone.env * gain;
-            left += value * (tone.pan <= 64 ? 1.f : (127 - tone.pan) / 63.f);
-            right += value * (tone.pan >= 64 ? 1.f : tone.pan / 64.f);
-            tone.phase += tone.step; if (tone.phase > twoPi) tone.phase -= twoPi;
+        for (std::size_t i=0; i<p.voiceCount;) {
+            auto& voice = p.voices[i];
+            p.renderTone(voice.tone, 1, left, right);
+            if (voice.fade.active && voice.fadeLeft > 0) {
+                p.renderTone(voice.fade, float(voice.fadeLeft) / float(p.fadeSamples), left, right);
+                if (--voice.fadeLeft == 0) voice.fade.active = false;
+            }
+            if (!voice.tone.active && !voice.fade.active) {
+                voice = p.voices[--p.voiceCount];
+            } else ++i;
         }
         left = std::tanh(left); right = std::tanh(right);
         for (int c = 0; c < channelCount; ++c) if (channels && channels[c])
@@ -387,7 +472,7 @@ void PlaybackEngine::render(float* const* channels, int channelCount, int count)
         p.cursor += 1 / p.rate;
         if (p.loopEnd <= p.loopStart && p.cursor > p.audioSchedule->length + .3) {
             p.playing = false; p.cursor = p.audioSchedule->length;
-            for (auto& tone : p.tones) tone = {};
+            p.voiceCount = 0;
             break;
         }
     }

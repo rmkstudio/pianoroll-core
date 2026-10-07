@@ -16,6 +16,8 @@ struct Host final : PianoRollHost {
     std::vector<bool> selected, startSelection;
     int ppq = 96, cc = 1, begins = 0, commits = 0, changes = 0, baselines = 0, seeks = 0;
     bool isBusy = false, loaded = true, dirty = false, rejectFollow = false, linked = false;
+    bool fractional = false;
+    mutable int noteReads = 0, groupReads = 0, laneReads = 0;
     double lastSeek = -1, loopA = 0, loopB = 0, strokeStart = -1, strokeEnd = -1;
     std::map<double, int> strokePoints;
     bool strokeOpen = false;
@@ -27,9 +29,10 @@ struct Host final : PianoRollHost {
     int unitsPerQuarter() const override { return ppq; }
     double documentLength() const override { return ppq * 8.0; }
     double maximumTime() const override { return 0x0ffffffe; }
-    double roundTime(double t) const override { return std::round(t); }
+    double roundTime(double t) const override { return fractional ? t : std::round(t); }
+    double minimumNoteLength() const override { return fractional ? .001 : 1; }
     std::size_t noteCount() const override { return notes.size(); }
-    ViewNote note(std::size_t i) const override { return notes[i]; }
+    ViewNote note(std::size_t i) const override { ++noteReads; return notes[i]; }
     bool noteSelected(std::size_t i) const override { return selected[i]; }
     bool hasSelection() const override
     { for (bool s : selected) if (s) return true; return false; }
@@ -37,13 +40,13 @@ struct Host final : PianoRollHost {
     { return [](std::size_t, juce::String&) { return false; }; }
     std::function<bool(std::size_t)> keySwitches() const override
     { return [](std::size_t) { return false; }; }
-    bool groupAlive(int) const override { return true; }
+    bool groupAlive(int) const override { ++groupReads; return true; }
     bool groupInScope(int group) const override { return group == 0; }
     bool pitchesFolded() const override { return false; }
     bool rowHighlighted(int) const override { return false; }
     int controller() const override { return cc; }
     int channel() const override { return 0; }
-    std::vector<LanePoint> controllerLane() const override { return {{0, 64, 0}, {192, 90, 2}}; }
+    std::vector<LanePoint> controllerLane() const override { ++laneReads; return {{0, 64, 0}, {192, 90, 2}}; }
     double playheadTime() const override { return lastSeek < 0 ? 0 : lastSeek; }
     bool loopRange(double& a, double& b) const override
     { a = loopA; b = loopB; return loopB > loopA; }
@@ -312,6 +315,46 @@ void laneSplitFollowsMouse()
     require(std::abs(f.view.controllerLaneBounds().getHeight() - (cc + 20)) <= 2,
             "CC splitter follows the mouse");
 }
+void fractionalTimeAndPaintCost()
+{
+    Host host;
+    host.ppq = 1;
+    host.fractional = true;
+    host.notes = {{0, .25, 60, 100, 0, 0, true}};
+    host.selected = {false};
+    PianoRollView view(host);
+    host.view = &view;
+    view.setSize(980, 680);
+    view.fit();
+    auto* snap = dynamic_cast<juce::ComboBox*>(view.keyboardControls()[0]);
+    const double expected[] = {.001, 1, .5, .25, .125, 1.0 / 3, 1.0 / 6};
+    for (int i = 0; i < 7; ++i)
+    {
+        snap->setSelectedId(i + 1, juce::dontSendNotification);
+        require(std::abs(view.snapPolicy().step - expected[i]) < 1e-9,
+                "Beat-unit hosts retain fractional snap values");
+    }
+    const auto rect = view.noteRect(host.notes[0]);
+    const juce::Point<float> edge(rect.getRight() - 1.5f, rect.getCentreY());
+    drag(view, edge, edge + juce::Point<float>(4, 0), left | alt);
+    require(host.notes[0].length > .25 && host.notes[0].length < .5,
+            "Resizing a fractional note must not force a whole beat");
+    host.notes.clear(); host.selected.clear();
+    for (int i = 0; i < 10000; ++i)
+    {
+        host.notes.push_back({double(i), .25, 60, 100, i % 8, 0, true});
+        host.selected.push_back(false);
+    }
+    view.setTimeWindow(100, 8);
+    view.setLaneLayout(false, false, .76f, .12f);
+    host.noteReads = host.groupReads = host.laneReads = 0;
+    juce::Image image(juce::Image::ARGB, 980, 680, true);
+    juce::Graphics graphics(image);
+    view.paint(graphics);
+    require(host.laneReads == 0, "Hidden CC lane does not request controller data");
+    require(host.noteReads == (int)host.notes.size(), "Paint reads each note only once");
+    require(host.groupReads <= 8, "Paint resolves track membership once per group");
+}
 void busyBlocksEdits()
 {
     Fixture f;
@@ -326,7 +369,7 @@ int main()
     try {
         juce::ScopedJuceInitialiser_GUI initialiser;
         geometryAndPaint(); selectionAndMove(); resizeCopyAndFollow(); pencilEraseMarquee();
-        lanesNavigationAndRuler(); busyBlocksEdits(); toolbar(); laneSplitFollowsMouse();
+        lanesNavigationAndRuler(); busyBlocksEdits(); toolbar(); laneSplitFollowsMouse(); fractionalTimeAndPaintCost();
         std::cout << checks << " piano-roll view checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << "FAILED: " << error.what() << '\n'; return 1; }
 }

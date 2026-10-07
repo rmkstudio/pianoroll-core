@@ -344,10 +344,8 @@ SnapPolicy PianoRollView::snapPolicy(bool free, Rounding rounding) const
 {
     static const double beats[] = {0, 1, .5, .25, .125, 1.0 / 3, 1.0 / 6};
     // The product applies its own final rounding (Recover: JUCE roundToInt).
-    return {free ? 1
-                 : jmax(1.0, host.unitsPerQuarter() *
-                                 beats[jlimit(0, 6, snapSelect.getSelectedId() - 1)]),
-            rounding, 0, 0};
+    const auto step = host.unitsPerQuarter() * beats[jlimit(0, 6, snapSelect.getSelectedId() - 1)];
+    return {free ? host.minimumNoteLength() : jmax(host.minimumNoteLength(), step), rounding, 0, 0};
 }
 double PianoRollView::quantize(double time, bool free) const
 {
@@ -441,7 +439,7 @@ ViewState PianoRollView::navigationView() const
 NavigationLimits PianoRollView::navigationLimits() const
 {
     const double ppq = host.unitsPerQuarter();
-    return {jmax(1., ppq / 16.), jmax(ppq * 1024, total * 2), jmax(total + ppq * 4, left + span),
+    return {jmax(host.minimumNoteLength(), ppq / 16.), jmax(ppq * 1024, total * 2), jmax(total + ppq * 4, left + span),
             jmax(4., notesArea.getHeight() / 48.)};
 }
 void PianoRollView::applyNavigation(ViewState v)
@@ -632,32 +630,47 @@ void PianoRollView::paint(Graphics& g)
                       n % 12 == 0 ? c.ink : c.muted);
         }
     }
-    const auto count = host.noteCount();
+    paintedNotes.clear();
+    std::map<int, std::pair<bool, bool>> groups;
+    const bool folded = host.pitchesFolded() && !pitchRows.empty();
+    for (std::size_t i = 0; i < host.noteCount(); ++i)
+    {
+        const auto n = host.note(i);
+        auto group = groups.find(n.group);
+        if (group == groups.end())
+            group = groups.emplace(n.group, std::make_pair(host.groupAlive(n.group),
+                                                           host.groupInScope(n.group))).first;
+        if (!group->second.first ||
+            (folded && std::find(pitchRows.begin(), pitchRows.end(), n.pitch) == pitchRows.end()))
+            continue;
+        const auto bounds = noteRect(n);
+        // Keep long notes crossing the left edge; velocity uses the original start.
+        if (bounds.getRight() < notesArea.getX() || bounds.getX() > notesArea.getRight())
+            continue;
+        paintedNotes.push_back({i, n, bounds, group->second.second, host.noteSelected(i)});
+    }
     {
         const auto noteLabel = host.noteLabels();
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(notesArea.toNearestInt());
         for (bool foreground : {false, true})
-            for (std::size_t i = 0; i < count; ++i)
+            for (const auto& item : paintedNotes)
             {
-                const auto n = host.note(i);
-                if (displayed(n) && inScope(n) == foreground)
+                const auto& n = item.note;
+                const auto r = item.bounds;
+                if (item.foreground != foreground || !r.intersects(notesArea))
+                    continue;
+                auto colour = c.groupColour(n.group);
+                if (foreground && item.selected)
+                    colour = c.accent;
+                const float alpha = foreground ? (n.editable ? .82f : .3f) : .16f;
+                g.setColour(colour.withAlpha(alpha));
+                g.fillRoundedRectangle(r, 2);
+                if (foreground && showPitchLabel(row, r.getWidth()))
                 {
-                    auto r = noteRect(n);
-                    if (!r.intersects(notesArea))
-                        continue;
-                    auto colour = c.groupColour(n.group);
-                    if (foreground && host.noteSelected(i))
-                        colour = c.accent;
-                    const float alpha = foreground ? (n.editable ? .82f : .3f) : .16f;
-                    g.setColour(colour.withAlpha(alpha));
-                    g.fillRoundedRectangle(r, 2);
-                    if (foreground && showPitchLabel(row, r.getWidth()))
-                    {
-                        String text;
-                        label(g, noteLabel(i, text) ? text : pitchName(n.pitch), r.reduced(4, 0),
-                              jmin(12.f, row - 1), c.background);
-                    }
+                    String text;
+                    label(g, noteLabel(item.index, text) ? text : pitchName(n.pitch), r.reduced(4, 0),
+                          jmin(12.f, row - 1), c.background);
                 }
             }
         if (auto* marquee = std::get_if<gesture::Marquee>(&gesture))
@@ -674,21 +687,22 @@ void PianoRollView::paint(Graphics& g)
     if (showCC)
         label(g, cc < 0 ? String::fromUTF8("CC") : "CC" + String(cc),
               {2, ccArea.getY() - 22, 56, 18}, 12, c.accent);
+    if (showVelocity)
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(velocityArea.toNearestInt());
         for (bool foreground : {false, true})
-            for (std::size_t i = 0; i < count; ++i)
+            for (const auto& item : paintedNotes)
             {
-                const auto n = host.note(i);
-                if (displayed(n) && inScope(n) == foreground)
-                {
-                    auto xx = timeToX(n.start);
-                    auto hh = velocityArea.getHeight() * n.velocity / 127.f;
-                    auto colour = foreground && host.noteSelected(i) ? c.accent : c.velocity;
-                    g.setColour(colour.withAlpha(foreground ? 1.f : .16f));
-                    g.fillRect(xx, velocityArea.getBottom() - hh, 3.f, hh);
-                }
+                if (item.foreground != foreground)
+                    continue;
+                const auto xx = timeToX(item.note.start);
+                if (xx + 3 < velocityArea.getX() || xx > velocityArea.getRight())
+                    continue;
+                const auto hh = velocityArea.getHeight() * item.note.velocity / 127.f;
+                const auto colour = foreground && item.selected ? c.accent : c.velocity;
+                g.setColour(colour.withAlpha(foreground ? 1.f : .16f));
+                g.fillRect(xx, velocityArea.getBottom() - hh, 3.f, hh);
             }
     }
     if (showCC)
@@ -701,10 +715,11 @@ void PianoRollView::paint(Graphics& g)
             g.setColour(c.line);
             g.drawHorizontalLine(roundToInt(yy), ccArea.getX(), ccArea.getRight());
         }
+    if (showCC)
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(ccArea.toNearestInt());
-        const auto points = host.controllerLane();
+        const auto points = host.controllerLaneRange(left, left + span);
         for (std::size_t i = 0; i < points.size(); ++i)
         {
             auto p = points[i];
@@ -733,15 +748,27 @@ void PianoRollView::paint(Graphics& g)
         g.drawHorizontalLine(roundToInt(yy), 60, (float)getWidth());
         g.fillRoundedRectangle(getWidth() * .5f - 14, yy - 1, 28, 3, 1);
     }
+    const PaintedNote* hoveredNote = nullptr;
+    if (notesArea.contains(hover))
+        for (bool foreground : {true, false})
+        {
+            for (auto it = paintedNotes.rbegin(); it != paintedNotes.rend(); ++it)
+                if (it->foreground == foreground && coreRect(it->bounds).contains({hover.x, hover.y}))
+                {
+                    hoveredNote = &*it;
+                    break;
+                }
+            if (hoveredNote)
+                break;
+        }
     if (notesArea.contains(hover) && !host.busy())
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(notesArea.toNearestInt());
-        int index = hit(hover, true);
-        if (index >= 0)
+        if (hoveredNote)
         {
             g.setColour(c.ink);
-            g.drawRoundedRectangle(noteRect(host.note((std::size_t)index)), 2, 1.2f);
+            g.drawRoundedRectangle(hoveredNote->bounds, 2, 1.2f);
         }
         else if (isPaintMode())
         {
@@ -767,10 +794,9 @@ void PianoRollView::paint(Graphics& g)
                                             velocityArea.getHeight())));
     else if (notesArea.contains(hover))
     {
-        int i = hit(hover, true);
-        if (i >= 0)
+        if (hoveredNote)
         {
-            const auto n = host.note((std::size_t)i);
+            const auto& n = hoveredNote->note;
             feedback = pitchName(n.pitch) + String::fromUTF8(" · 力度 ") + String(n.velocity) +
                        String::fromUTF8(" · 长度 ") + String(n.length / ppq, 2) +
                        String::fromUTF8(" 拍");

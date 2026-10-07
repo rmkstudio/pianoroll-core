@@ -153,6 +153,76 @@ int main() {
     check(b.silent() && !p.isPlaying(), "device restart never reopens pending host-state silence");
     p.setSchedule(one()); p.play(); b.run(p); check(!b.silent(), "message-thread restored schedule can reopen both lifecycle stages");
 
+    // Long CC64 must not hold a released key at full amplitude indefinitely.
+    for (double rate : {44100., 48000., 96000.}) {
+        PlaybackEngine tail; tail.prepare(rate);
+        auto score = makePlaybackSchedule({{0,.05,69,100,0,1}},
+            {{0,1,64,127},{30,1,64,0}}, 31);
+        check(near(score->notes[0].end,30), "tail decay does not shorten musical pedal schedule");
+        tail.setSchedule(score); tail.play();
+        Buffer probe(int(rate*.02));
+        tail.seek(.2); probe.run(tail); const double fresh=probe.power(probe.left);
+        tail.seek(2.2); probe.run(tail);
+        check(fresh>0 && probe.power(probe.left)<fresh*.02, "pedal-only tail decays with elapsed seconds at every sample rate");
+        tail.seek(12); probe.run(tail); check(probe.silent(), "seek cannot revive an exhausted pedal tail");
+        tail.setLoop(12,12.005); probe.run(tail); check(probe.silent(), "loop cannot revive an exhausted pedal tail");
+        tail.clearLoop(); tail.seek(0); probe.run(tail); check(!probe.silent(), "seeking back starts the note normally");
+        tail.setSchedule(makePlaybackSchedule({{0,20,69,100,0,1}}, {{0,1,64,127}},30));
+        tail.seek(12); probe.run(tail); check(!probe.silent(), "physically held long key does not get pedal-tail decay");
+    }
+    PlaybackEngine continuous; continuous.prepare(48000);
+    continuous.setSchedule(makePlaybackSchedule({{0,.05,69,100,0,1}}, {{0,1,64,127}},30));
+    continuous.play(); Buffer tailBlock(1024);
+    for(int i=0;i<400;++i) tailBlock.run(continuous);
+    check(tailBlock.silent(), "continuously rendered exhausted tail is recycled");
+    continuous.pause(); continuous.play(); tailBlock.run(continuous);
+    check(tailBlock.silent(), "resume cannot restore an exhausted tail");
+    // All 256 slots are occupied by muted held keys. The next audible key must
+    // still start, even without CC64; a full reference synth must not drop it.
+    std::vector<PlaybackNote> crowded;
+    for(int i=0;i<256;++i) crowded.push_back({0,1,36+i%64,100,0,0});
+    crowded.push_back({.1,1,81,100,1,1});
+    PlaybackEngine full; full.prepare(48000);
+    full.setSchedule(makePlaybackSchedule(crowded, {{0,0,7,0}},2)); full.play();
+    Buffer fullBlock(480);
+    for(int i=0;i<15;++i) fullBlock.run(full);
+    check(!fullBlock.silent(), "new audible note steals a full voice instead of being dropped");
+    full.stop(); fullBlock.run(full); check(fullBlock.silent(), "stop clears stolen voices and their fades");
+
+    // Render the same dense controller workload with different host block sizes.
+    const auto dense = makePlaybackSchedule({{0,.03,48,100,0,1},{.3,.35,72,110,1,2}},
+        {{0,1,64,127},{0,2,64,127},{1,1,11,40},{2,2,10,0},{3,1,64,0}},4);
+    std::vector<float> partitioned;
+    for(int block : {64,1024}) {
+        PlaybackEngine engine; engine.prepare(48000); engine.setSchedule(dense); engine.play();
+        Buffer part(block); std::vector<float> samples;
+        for(int i=0;i<192512/block;++i) { part.run(engine); samples.insert(samples.end(),part.left.begin(),part.left.end()); }
+        if(partitioned.empty()) partitioned=std::move(samples);
+        else check(samples==partitioned, "tail and controller rendering is independent of host block size");
+    }
+    // Force a voice steal mid-wave and verify no abrupt removal of its sample.
+    std::vector<PlaybackNote> bank(256, {0,1,69,1,0,1});
+    PlaybackEngine beforeSteal, afterSteal;
+    beforeSteal.prepare(48000); afterSteal.prepare(48000);
+    beforeSteal.setSchedule(makePlaybackSchedule(bank,{{0,1,7,8}},2));
+    bank.push_back({.1,1,81,1,0,1});
+    afterSteal.setSchedule(makePlaybackSchedule(bank,{{0,1,7,8}},2));
+    beforeSteal.play(); afterSteal.play(); Buffer ref(4802), stolen(4802);
+    ref.run(beforeSteal); stolen.run(afterSteal);
+    check(std::abs(ref.left[4801]-stolen.left[4801])<.00001f, "stolen voice fades instead of cutting mid-wave");
+    // Pathological simultaneous starts remain finite and allocation-free.
+    bank.resize(3000, {0,.5,72,127,0,1});
+    full.setSchedule(makePlaybackSchedule(bank,{{0,1,64,127}},1)); full.play(); fullBlock.run(full);
+    check(std::all_of(fullBlock.left.begin(),fullBlock.left.end(),[](float v){return std::isfinite(v)&&std::abs(v)<=1;}),
+        "excess simultaneous starts have finite bounded output");
+    for(double rate : {1000.,48000.,192000.,0.,std::numeric_limits<double>::min(),
+                        std::numeric_limits<double>::infinity()}) {
+        PlaybackEngine extreme; extreme.prepare(rate);
+        extreme.setSchedule(makePlaybackSchedule({{0,1,127,127,0,1}})); extreme.play(); fullBlock.run(extreme);
+        check(std::all_of(fullBlock.left.begin(),fullBlock.left.end(),[](float v){return std::isfinite(v);}),
+            "oscillator table wraps safely for highest pitch at low and high rates");
+    }
+
     // Stress the actual lock-free handoff. Audio runs concurrently while the
     // message thread replaces schedules, seeks, solos and invalidates restores.
     PlaybackEngine stress; stress.prepare(48000); stress.setSchedule(one()); stress.play();

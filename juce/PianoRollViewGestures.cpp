@@ -444,7 +444,7 @@ void PianoRollView::dragNotes(gesture::NoteDrag& drag, const MouseEvent& e)
         bounds,
         quantize(grabbed.length + delta.x * span / notesArea.getWidth(), e.mods.isAltDown()) -
             grabbed.length,
-        1);
+        host.minimumNoteLength());
     if (edit == gesture::NoteDrag::Edit::resize && host.linkedNoteEnds())
     {
         std::vector<ActionNote> input;
@@ -460,7 +460,7 @@ void PianoRollView::dragNotes(gesture::NoteDrag& drag, const MouseEvent& e)
                              n.editable, keySwitch(i), false});
         }
         ActionRules rules;
-        rules.minimumLength = 1;
+        rules.minimumLength = host.minimumNoteLength();
         rules.maximumTime = host.maximumTime();
         auto result = moveLinkedBoundary(input, (std::size_t)grab, true,
                                          grabbed.start + grabbed.length + lengthDelta, .001, rules);

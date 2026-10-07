@@ -104,3 +104,5 @@ python tools/snapshot.py --zip /path/to/PianoRollCore-0.5.0-Source.zip
 快照工具需要 Python 3.10+ 标准库。目标已有不同内容时拒绝覆盖；升级前确认旧快照无本地改动后将其移出。发布脚本必须执行 `--verify <vendor路径>`；两产品记录相同 VERSION 和 `source_tree_sha256`。manifest 是内容一致性检查，不是来源签名。工具不打包构建目录、Git、缓存或其它 ZIP。
 
 版本号只修改 `include/PianoRollCore/Core.h` 中的 `pianoroll::version`。CMake 从此读取项目版本；`--refresh-manifest` 生成对应的 `VERSION` 和清单，`--verify` 检查它们一致。直接包含源码头文件的调用方式仍然可用，不依赖构建时生成的头文件。
+
+0.5.2 试听候选：长 CC64 下松键尾音会衰减并回收；正常长按不截断，满复音优先替换旧尾音。详见 RELEASE.md。

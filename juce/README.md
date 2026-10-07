@@ -85,3 +85,9 @@ a child. Do not call host functions from the host's own constructor before the
 view is fully constructed. With "no snap", the step is one time unit; a product
 that uses quarter-note beats as its unit must account for that until a host
 setting exists.
+
+## Indexed lane and fractional-time hosts (0.5.1)
+
+Override `controllerLaneRange(start, end)` to return a sorted subset including the last point before start and first after end; points with equal times retain their order. The default delegates to `controllerLane()` for compatibility. Hidden controller lanes do not call either reader during paint.
+
+Tick hosts can keep the default `minimumNoteLength()` of 1. Hosts using fractional beats must return their smallest supported positive duration, and retain fractional values in `roundTime()`. The view uses this duration for free/snap resolution, resize limits and the minimum zoom window; it does not assume that a time unit is a tick.

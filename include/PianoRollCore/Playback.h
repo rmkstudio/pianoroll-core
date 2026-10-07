@@ -15,6 +15,8 @@ namespace pianoroll {
 struct PlaybackNote {
     double start = 0, end = 0;
     int pitch = 60, velocity = 100, group = 0, source = 0;
+    // Derived by makePlaybackSchedule before CC64 extends end; never exported.
+    double keyEnd = -1;
 };
 struct PlaybackController {
     double time = 0;
