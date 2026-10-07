@@ -10,6 +10,7 @@
 #include <PianoRollCore/Navigation.h>
 #include <PianoRollCore/NoteActions.h>
 #include <PianoRollCore/ViewGestures.h>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <functional>
@@ -61,6 +62,8 @@ struct ViewLayout
     // or in a lane header; a product may leave any of them empty.
     Rect fit, expand, editTrack, channel, allTracks, controller, drag;
     Rect ruler, notes, keys, velocity, cc, scroll;
+    // Optional explicit lane grab areas; custom layouts keep their own header geometry.
+    Rect velocityDivider, ccDivider;
 };
 ViewLayout defaultViewLayout(int width, int height, bool velocity, bool cc, float noteFraction,
                              float velocityFraction);
@@ -80,6 +83,18 @@ class PianoRollHost
     virtual double roundTime(double) const = 0;
     // Tick hosts retain a one-tick minimum; fractional-time hosts override this.
     virtual double minimumNoteLength() const { return 1; }
+    // Free time resolution is independent of the shortest legal note (zero is continuous).
+    virtual double freeTimeStep() const { return minimumNoteLength(); }
+    virtual NavigationLimits navigationLimits(NavigationLimits defaults) const { return defaults; }
+    virtual void viewChanged(ViewState) {}
+    // Real document indices, in paint order. The default keeps unindexed hosts compatible.
+    virtual std::vector<std::size_t> noteIndicesInRange(double, double) const
+    {
+        std::vector<std::size_t> indices;
+        indices.reserve(noteCount());
+        for (std::size_t i = 0; i < noteCount(); ++i) indices.push_back(i);
+        return indices;
+    }
 
     // Notes, by index into the product's current draft.
     virtual std::size_t noteCount() const = 0;
@@ -94,6 +109,34 @@ class PianoRollHost
     virtual bool groupInScope(int group) const = 0;
     virtual bool pitchesFolded() const = 0;
     virtual bool rowHighlighted(int pitch) const = 0;
+    // Geometry and skin policies never change note identity or own a document.
+    virtual juce::Rectangle<float> noteBounds(const ViewNote& n, const Viewport& v, float pitchY) const
+    {
+        const auto r = v.noteRect(n.start, n.start + n.length, n.pitch,
+                                  std::max(1.0, v.rowHeight - 1), 3);
+        return {(float)r.x, pitchY, (float)r.width, (float)r.height};
+    }
+    virtual juce::Point<float> noteHitExpansion() const { return {}; }
+    virtual HitPolicy noteHitPolicy() const { return HitPolicy::lastPainted; }
+    virtual bool preferForegroundHits() const { return true; }
+    virtual double linkedBoundaryTolerance() const { return .001; }
+    virtual bool relativeVelocityUsesScope() const { return false; }
+    virtual bool noteDrawEndsAtPointer() const { return false; }
+    virtual void paintOverlay(juce::Graphics&) const {}
+    virtual int linkedBoundarySource(std::size_t index) const
+    { const auto n = note(index); return n.group * 16 + n.channel; }
+    virtual bool paintPitchRows(juce::Graphics&, juce::Rectangle<float>, juce::Rectangle<float>,
+                                float, const std::function<float(int)>&) const { return false; }
+    virtual bool paintNote(juce::Graphics&, std::size_t, const ViewNote&, juce::Rectangle<float>,
+                           bool, bool) const { return false; }
+    virtual bool paintVelocityNote(juce::Graphics&, std::size_t, const ViewNote&,
+                                   juce::Rectangle<float>, float, bool, bool) const { return false; }
+    virtual bool showCanvasFeedback() const { return true; }
+    virtual juce::String emptyDocumentMessage() const
+    { return juce::String::fromUTF8("打开或拖入 MIDI 即可编辑；FLP 补全可选。"); }
+    virtual void pointerMoved(juce::Point<float>) {}
+    virtual bool noteGestureDropped(juce::Point<float>) { return false; }
+    virtual bool resizeLane(bool, float) { return false; }
 
     // Lanes and transport.
     virtual int controller() const = 0;
@@ -160,6 +203,7 @@ class PianoRollHost
     virtual bool auditionNote(int pitch, int velocity) = 0;
     virtual void stopAudition() = 0;
     virtual void pianoKeyDown(int pitch) = 0;
+    virtual bool pianoKeyDragged(int pitch) { return auditionNote(pitch, 100); }
     // True when the release was consumed (step input).
     virtual bool pianoKeyUp(int pitch) = 0;
     virtual void exportSelectedNotes() = 0;
@@ -208,6 +252,10 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     {
         return topPitch;
     }
+    ViewState viewState() const { return navigationView(); }
+    void setViewState(ViewState state) { applyNavigation(state); }
+    void setSnapPolicy(SnapPolicy policy) { suppliedSnap = policy; hasSuppliedSnap = true; }
+    float rowHeight() const { return row; }
     float timeToX(double time) const;
     double xToTime(float x) const;
     float pitchToY(int pitch) const;
@@ -341,10 +389,13 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     PianoRollHost& host;
     ViewPalette colours;
     double left = 0, span = 768, total = 768;
-    float topPitch = 80, row = 12;
+    double topPitch = 80, row = 12;
     float noteFraction = .76f, velocityFraction = .12f, laneBottom = 0;
     bool showVelocity = true, showCC = true;
     juce::Rectangle<float> notesArea, keysArea, rulerArea, velocityArea, ccArea;
+    juce::Rectangle<float> velocityDivider, ccDivider;
+    bool hasSuppliedSnap = false;
+    SnapPolicy suppliedSnap;
     std::vector<int> pitchRows;
     MeterMap meter;
     PlayheadFollow follow;
@@ -359,6 +410,7 @@ class PianoRollView : public juce::Component, private juce::ScrollBar::Listener
     void scrollBarMoved(juce::ScrollBar*, double pos) override
     {
         left = pos;
+        host.viewChanged(navigationView());
         repaint();
     }
     Viewport viewport() const;

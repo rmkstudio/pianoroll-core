@@ -1,4 +1,4 @@
-# PianoRollCore 0.5.0
+# PianoRollCore 0.5.2
 
 这是 MIDI Lines 和 MIDI Recover 共用的钢琴窗体验模块。0.3.0 在原有导航、播放与编辑规则上增加命令搜索、快捷键设置、原子宏、音符处理、控制曲线变换，以及音高显示和步进输入。插件继续各自安装，公共代码编译在各自 VST3 内，无需另装组件。
 
@@ -7,6 +7,16 @@
 0.4.0 新增可选的 JUCE 钢琴窗组件 `PianoRollCore::View`：音符、标尺、琴键、力度栏和 CC 栏的绘制，各工具的鼠标手势、光标、视图窗口和通用工具栏都由共享模块提供；插件只通过 `PianoRollHost` 接口提供数据并接收修改，文档、撤销和提交仍由插件负责。纯 C++ 核心的接口和行为没有改变。具体变化和接入说明见 `RELEASE.md`，组件说明见 `juce/README.md`。
 
 0.5.0 把钢琴窗工具栏合为一行（播放、时钟、撤销、画笔／选择、吸附、“编辑”菜单），标尺小节号按宽度稀疏显示，栏高分隔条跟手；`ViewLayout` 和 `PianoRollHost` 的菜单接口有不兼容变化，见 `RELEASE.md`。
+
+## 0.5.2 Lines integration branch — 2026-10-07
+
+Remote source base: `7abf60236c4c6aa19563853203436faabdc8541b` on `codex/pianoroll-view-0.5.2`. The published 55-file snapshot verified: all 53 covered file hashes and the combined source hash matched. Existing source/validation records below describe earlier candidate work.
+
+This branch adds optional, backward-compatible host policies for continuous beat movement, navigation limits, real visible note indices, independent MIDI source boundaries, thin note geometry and nearest-hit selection. Folded pitch drags use the displayed row table. Product toolbar slots can be empty; their children are hidden. Hosts may retain existing chrome and supply drawing callbacks while the shared view owns canvas traversal and gestures. CC follow and revision-safe commit remain host responsibilities.
+
+Playback preparation now clears audio-owned voice pointers and defers chasing until render has acquired a live schedule; this prevents dereferencing a retired schedule after a restore gate or failed handoff. Cursor/revision policy is preserved. Tests cover retirement/device restart under ASan/UBSan.
+
+Current CI evidence is recorded in VALIDATION.md; Windows/DAW listening remains outside this branch's validation.
 
 ## 现在共同维护哪些功能
 

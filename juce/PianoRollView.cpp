@@ -9,10 +9,6 @@ Rect coreRect(Rectangle<float> r)
 {
     return {r.getX(), r.getY(), r.getWidth(), r.getHeight()};
 }
-Rectangle<float> juceRect(Rect r)
-{
-    return {(float)r.x, (float)r.y, (float)r.width, (float)r.height};
-}
 void makeCursors(const ViewPalette& colours, MouseCursor& pencil, MouseCursor& copy)
 {
     Image icon(Image::ARGB, 24, 24, true);
@@ -81,11 +77,15 @@ ViewLayout defaultViewLayout(int w, int h, bool velocity, bool cc, float nf, flo
     r.notes = {58, start, w - 59, nh};
     r.keys = {0, start, 58, nh};
     if (velocity)
+        {
         r.velocity = {58, start + nh + 19, w - 59, jmax(24, vh - 19)};
+        r.velocityDivider = {58, r.velocity.getY() - 13, w - 59, 6};
+    }
     if (cc)
     {
         r.cc = {58, start + nh + vh + 24, w - 59, jmax(24, cch - 24)};
         r.controller = {0, r.cc.getY() - 23, 120, 22};
+        r.ccDivider = {58, r.cc.getY() - 15, w - 59, 6};
     }
     r.scroll = {58, h - 11, w - 59, 9};
     return r;
@@ -273,7 +273,7 @@ void PianoRollView::fit()
     }
     if (host.pitchesFolded())
     {
-        topPitch = 127;
+        topPitch = (float)jmax(0, (int)pitchRows.size() - 1);
         row = jlimit(3.f, 48.f, notesArea.getHeight() / jmax(1, (int)pitchRows.size()));
     }
     clampView();
@@ -329,12 +329,14 @@ void PianoRollView::setTimeWindow(double start, double width)
 void PianoRollView::clampView()
 {
     const double ppq = host.unitsPerQuarter();
-    span = jlimit(12.0, jmax(ppq * 1024, host.documentLength() + ppq * 8), span);
-    left = jlimit(0.0, 268000000.0 - span, left);
-    row = jlimit(jmax(.5f, notesArea.getHeight() / 128.f), 48.f, row);
-    topPitch = jlimit(jmin(127.f, notesArea.getHeight() / row - 1), 127.f, topPitch);
+    const auto v = clampNavigation(navigationView(), navigationLimits());
+    left = v.timeStart;
+    span = v.timeSpan;
+    topPitch = v.pitchHigh;
+    row = jmax(1.f, notesArea.getHeight()) / v.pitchSpan();
     hscroll.setRangeLimits(0, jmax(total + ppq * 4, left + span));
     hscroll.setCurrentRange(left, span, dontSendNotification);
+    host.viewChanged(navigationView());
 }
 Viewport PianoRollView::viewport() const
 {
@@ -344,8 +346,14 @@ SnapPolicy PianoRollView::snapPolicy(bool free, Rounding rounding) const
 {
     static const double beats[] = {0, 1, .5, .25, .125, 1.0 / 3, 1.0 / 6};
     // The product applies its own final rounding (Recover: JUCE roundToInt).
+    if (hasSuppliedSnap)
+    {
+        auto policy = suppliedSnap;
+        if (free) policy.step = host.freeTimeStep();
+        return policy;
+    }
     const auto step = host.unitsPerQuarter() * beats[jlimit(0, 6, snapSelect.getSelectedId() - 1)];
-    return {free ? host.minimumNoteLength() : jmax(host.minimumNoteLength(), step), rounding, 0, 0};
+    return {free || step == 0 ? host.freeTimeStep() : step, rounding, 0, 0};
 }
 double PianoRollView::quantize(double time, bool free) const
 {
@@ -373,28 +381,20 @@ float PianoRollView::pitchToY(int pitch) const
     if (host.pitchesFolded() && !pitchRows.empty())
     {
         auto it = std::lower_bound(pitchRows.begin(), pitchRows.end(), pitch);
-        if (it == pitchRows.end() || *it != pitch)
-            return -1000;
-        return notesArea.getY() + ((int)pitchRows.size() - 1 -
-                                   (int)std::distance(pitchRows.begin(), it) - (127 - topPitch)) *
-                                      row;
+        if (it == pitchRows.end() || *it != pitch) return -1000;
+        return (float)viewport().pitchToY((double)std::distance(pitchRows.begin(), it));
     }
     return (float)viewport().pitchToY(pitch);
 }
 int PianoRollView::yToPitch(float py) const
 {
     if (host.pitchesFolded() && !pitchRows.empty())
-        return pitchRows[jlimit(0, (int)pitchRows.size() - 1,
-                                (int)pitchRows.size() - 1 -
-                                    (int)((py - notesArea.getY()) / row + 127 - topPitch))];
+        return pitchRows[jlimit(0, (int)pitchRows.size() - 1, viewport().yToPitch(py))];
     return viewport().yToPitch(py);
 }
 Rectangle<float> PianoRollView::noteRect(const ViewNote& n) const
 {
-    auto r =
-        juceRect(viewport().noteRect(n.start, n.start + n.length, n.pitch, jmax(1.f, row - 1), 3));
-    r.setY(pitchToY(n.pitch));
-    return r;
+    return host.noteBounds(n, viewport(), pitchToY(n.pitch));
 }
 bool PianoRollView::displayed(const ViewNote& n) const
 {
@@ -404,27 +404,36 @@ bool PianoRollView::displayed(const ViewNote& n) const
 }
 int PianoRollView::hit(juce::Point<float> point, bool allowBackground) const
 {
-    auto find = [&](bool foreground)
+    const auto expand = host.noteHitExpansion();
+    const float padding = jmax(3.f, expand.x + 3.f);
+    const auto indices = host.noteIndicesInRange(xToTime(point.x - padding), xToTime(point.x + padding));
+    auto find = [&](int foreground)
     {
-        return pianoroll::hitTest(host.noteCount(), {point.x, point.y},
-                                  [&](std::size_t i)
-                                  {
-                                      const auto n = host.note(i);
-                                      return HitCandidate{
-                                          coreRect(noteRect(n)), 0,
-                                          displayed(n) && (foreground ? inScope(n) : !inScope(n))};
-                                  });
+        const int found = pianoroll::hitTest(indices.size(), {point.x, point.y},
+            [&](std::size_t candidate)
+            {
+                const auto index = indices[candidate];
+                if (index >= host.noteCount()) return HitCandidate{{}, 0, false};
+                const auto n = host.note(index);
+                const auto bounds = noteRect(n);
+                const bool scoped = inScope(n);
+                return HitCandidate{coreRect(bounds.expanded(expand.x, expand.y)),
+                    std::abs(point.y - bounds.getCentreY()),
+                    displayed(n) && (foreground < 0 ? (allowBackground || scoped)
+                                                   : scoped == (foreground != 0))};
+            }, host.noteHitPolicy());
+        return found < 0 ? -1 : (int)indices[(std::size_t)found];
     };
-    // Match the paint order: foreground wins when two notes overlap exactly.
-    const int foreground = find(true);
-    return foreground >= 0 || !allowBackground ? foreground : find(false);
+    if (!host.preferForegroundHits()) return find(-1);
+    const int foreground = find(1);
+    return foreground >= 0 || !allowBackground ? foreground : find(0);
 }
 void PianoRollView::setPitchRows(std::vector<int> rows, bool resetFoldedView)
 {
     pitchRows = std::move(rows);
     if (resetFoldedView && host.pitchesFolded() && !pitchRows.empty())
     {
-        topPitch = 127;
+        topPitch = (float)pitchRows.size() - 1;
         row = jlimit(3.f, 48.f, notesArea.getHeight() / pitchRows.size());
     }
 }
@@ -434,20 +443,22 @@ void PianoRollView::setMeter(std::vector<MeterChange> changes, int unitsPerQuart
 }
 ViewState PianoRollView::navigationView() const
 {
-    return {left, span, topPitch - notesArea.getHeight() / row + 1, topPitch};
+    return {left, span, topPitch - jmax(1.f, notesArea.getHeight()) / row + 1, topPitch};
 }
 NavigationLimits PianoRollView::navigationLimits() const
 {
     const double ppq = host.unitsPerQuarter();
-    return {jmax(host.minimumNoteLength(), ppq / 16.), jmax(ppq * 1024, total * 2), jmax(total + ppq * 4, left + span),
-            jmax(4., notesArea.getHeight() / 48.)};
+    return host.navigationLimits({jmax(host.minimumNoteLength(), ppq / 16.),
+             jmax(ppq * 1024, host.documentLength() * 2),
+             jmax(host.documentLength() + ppq * 4, left + span),
+             jmax(4., notesArea.getHeight() / 48.)});
 }
 void PianoRollView::applyNavigation(ViewState v)
 {
     left = v.timeStart;
     span = v.timeSpan;
-    topPitch = (float)v.pitchHigh;
-    row = (float)(notesArea.getHeight() / v.pitchSpan());
+    topPitch = v.pitchHigh;
+    row = jmax(1.f, notesArea.getHeight()) / v.pitchSpan();
     clampView();
     repaint();
 }
@@ -517,6 +528,12 @@ void PianoRollView::resized()
     keysArea = r.keys.toFloat();
     velocityArea = r.velocity.toFloat();
     ccArea = r.cc.toFloat();
+    velocityDivider = r.velocityDivider.toFloat();
+    ccDivider = r.ccDivider.toFloat();
+    if (velocityDivider.isEmpty() && !velocityArea.isEmpty())
+        velocityDivider = {velocityArea.getX(), velocityArea.getY() - 13, velocityArea.getWidth(), 6};
+    if (ccDivider.isEmpty() && !ccArea.isEmpty())
+        ccDivider = {ccArea.getX(), ccArea.getY() - 15, ccArea.getWidth(), 6};
     laneBottom = showCC && !r.cc.isEmpty()                ? ccArea.getBottom()
                  : showVelocity && !r.velocity.isEmpty() ? velocityArea.getBottom()
                                                          : notesArea.getBottom();
@@ -525,6 +542,10 @@ void PianoRollView::resized()
     stopButton.setBounds(r.stop);
     followButton.setBounds(r.follow);
     transportLabel.setBounds(r.clock);
+    for (juce::Component* control : std::initializer_list<juce::Component*>{
+            &undoButton, &redoButton, &pencilButton, &pointerButton, &snapSelect, &editButton,
+            &playButton, &stopButton, &followButton, &transportLabel, &hscroll})
+        control->setVisible(!control->getBounds().isEmpty());
     host.placeProductControls(r);
     clampView();
 }
@@ -549,14 +570,25 @@ void PianoRollView::paint(Graphics& g)
     g.fillAll(c.background);
     // Thin dividers group transport, history and tools without boxing every action.
     g.setColour(c.line);
-    for (int xx : {undoButton.getX() - 6, pencilButton.getX() - 6})
-        g.drawVerticalLine(xx, 6.f, 22.f);
-    g.drawHorizontalLine(32, 0.f, (float)getWidth());
+    if (!playButton.getBounds().isEmpty() || !undoButton.getBounds().isEmpty() ||
+        !pencilButton.getBounds().isEmpty() || !snapSelect.getBounds().isEmpty())
+    {
+        for (const auto* button : {&undoButton, &pencilButton})
+            if (!button->getBounds().isEmpty())
+                g.drawVerticalLine(button->getX() - 6, (float)button->getY() + 6,
+                                   (float)button->getBottom() - 6);
+        const int bottom = jmax(playButton.getBottom(), undoButton.getBottom(),
+                                pencilButton.getBottom(), snapSelect.getBottom());
+        g.drawHorizontalLine(bottom + 4, keysArea.getX(), notesArea.getRight());
+    }
     g.setColour(c.panel);
     g.fillRect(notesArea);
     g.fillRect(velocityArea);
     g.fillRect(ccArea);
     // Each region is independently clipped, including the ruler and pitch labels.
+    const bool customRows = host.paintPitchRows(g, keysArea, notesArea, row,
+                                               [this](int pitch) { return pitchToY(pitch); });
+    if (!customRows)
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(notesArea.toNearestInt());
@@ -565,7 +597,7 @@ void PianoRollView::paint(Graphics& g)
             auto yy = pitchToY(n);
             bool black = n % 12 == 1 || n % 12 == 3 || n % 12 == 6 || n % 12 == 8 || n % 12 == 10;
             g.setColour(host.rowHighlighted(n) ? c.scaleRow : (black ? c.blackRow : c.whiteRow));
-            g.fillRect(notesArea.getX(), yy, notesArea.getWidth(), jmax(.3f, row - 1));
+            g.fillRect(notesArea.getX(), yy, notesArea.getWidth(), jmax(.3f, (float)row - 1));
         }
     }
     const auto marks = meter.grid(left, left + span, span * 8 / jmax(1.f, notesArea.getWidth()),
@@ -619,22 +651,26 @@ void PianoRollView::paint(Graphics& g)
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(keysArea.toNearestInt());
-        for (int n = 0; n < 128; ++n)
+        if (!customRows) for (int n = 0; n < 128; ++n)
         {
             auto yy = pitchToY(n);
             bool black = n % 12 == 1 || n % 12 == 3 || n % 12 == 6 || n % 12 == 8 || n % 12 == 10;
             g.setColour(black ? c.blackKey : c.whiteKey);
-            g.fillRect(0.f, yy, black ? 36.f : 56.f, jmax(.3f, row - 1));
-            if (showPitchLabel(row, 50, n % 12 == 0))
-                label(g, pitchName(n), {3, yy, 50, row - 1}, jmin(12.f, row - 1),
+            g.fillRect(keysArea.getX(), yy, black ? keysArea.getWidth() * (36.f / 58.f)
+                                                      : jmax(0.f, keysArea.getWidth() - 2),
+                       jmax(.3f, (float)row - 1));
+            if (showPitchLabel(row, keysArea.getWidth() - 8, n % 12 == 0))
+                label(g, pitchName(n), {keysArea.getX() + 3, yy, keysArea.getWidth() - 8, (float)row - 1}, jmin(12.f, (float)row - 1),
                       n % 12 == 0 ? c.ink : c.muted);
         }
     }
     paintedNotes.clear();
     std::map<int, std::pair<bool, bool>> groups;
     const bool folded = host.pitchesFolded() && !pitchRows.empty();
-    for (std::size_t i = 0; i < host.noteCount(); ++i)
+    const double paddingTime = span * 3 / jmax(1.f, notesArea.getWidth());
+    for (std::size_t i : host.noteIndicesInRange(left - paddingTime, left + span + paddingTime))
     {
+        if (i >= host.noteCount()) continue;
         const auto n = host.note(i);
         auto group = groups.find(n.group);
         if (group == groups.end())
@@ -660,6 +696,7 @@ void PianoRollView::paint(Graphics& g)
                 const auto r = item.bounds;
                 if (item.foreground != foreground || !r.intersects(notesArea))
                     continue;
+                if (host.paintNote(g, item.index, n, r, foreground, item.selected)) continue;
                 auto colour = c.groupColour(n.group);
                 if (foreground && item.selected)
                     colour = c.accent;
@@ -670,7 +707,7 @@ void PianoRollView::paint(Graphics& g)
                 {
                     String text;
                     label(g, noteLabel(item.index, text) ? text : pitchName(n.pitch), r.reduced(4, 0),
-                          jmin(12.f, row - 1), c.background);
+                          jmin(12.f, (float)row - 1), c.background);
                 }
             }
         if (auto* marquee = std::get_if<gesture::Marquee>(&gesture))
@@ -699,6 +736,8 @@ void PianoRollView::paint(Graphics& g)
                 const auto xx = timeToX(item.note.start);
                 if (xx + 3 < velocityArea.getX() || xx > velocityArea.getRight())
                     continue;
+                if (host.paintVelocityNote(g, item.index, item.note, velocityArea, xx,
+                                          foreground, item.selected)) continue;
                 const auto hh = velocityArea.getHeight() * item.note.velocity / 127.f;
                 const auto colour = foreground && item.selected ? c.accent : c.velocity;
                 g.setColour(colour.withAlpha(foreground ? 1.f : .16f));
@@ -739,29 +778,35 @@ void PianoRollView::paint(Graphics& g)
             }
         }
     }
-    for (float yy :
-         {showVelocity ? velocityArea.getY() - 10 : -1, showCC ? ccArea.getY() - 12 : -1})
+    for (auto divider : {showVelocity ? velocityDivider : Rectangle<float>{},
+                          showCC ? ccDivider : Rectangle<float>{}})
     {
-        if (yy < 0)
-            continue;
+        if (divider.isEmpty()) continue;
+        const float yy = divider.getCentreY();
         g.setColour(c.line);
-        g.drawHorizontalLine(roundToInt(yy), 60, (float)getWidth());
-        g.fillRoundedRectangle(getWidth() * .5f - 14, yy - 1, 28, 3, 1);
+        g.drawHorizontalLine(roundToInt(yy), divider.getX(), divider.getRight());
+        g.fillRoundedRectangle(divider.getCentreX() - 14, yy - 1, 28, 3, 1);
     }
     const PaintedNote* hoveredNote = nullptr;
     if (notesArea.contains(hover))
-        for (bool foreground : {true, false})
+    {
+        const auto expansion = host.noteHitExpansion();
+        auto find = [&](int foreground)
         {
-            for (auto it = paintedNotes.rbegin(); it != paintedNotes.rend(); ++it)
-                if (it->foreground == foreground && coreRect(it->bounds).contains({hover.x, hover.y}))
+            return pianoroll::hitTest(paintedNotes.size(), {hover.x, hover.y},
+                [&](std::size_t i)
                 {
-                    hoveredNote = &*it;
-                    break;
-                }
-            if (hoveredNote)
-                break;
-        }
-    if (notesArea.contains(hover) && !host.busy())
+                    const auto& item = paintedNotes[i];
+                    return HitCandidate{coreRect(item.bounds.expanded(expansion.x, expansion.y)),
+                        std::abs(hover.y - item.bounds.getCentreY()),
+                        foreground < 0 || item.foreground == (foreground != 0)};
+                }, host.noteHitPolicy());
+        };
+        int found = host.preferForegroundHits() ? find(1) : find(-1);
+        if (found < 0 && host.preferForegroundHits()) found = find(0);
+        if (found >= 0) hoveredNote = &paintedNotes[(std::size_t)found];
+    }
+    if (host.showCanvasFeedback() && notesArea.contains(hover) && !host.busy())
     {
         Graphics::ScopedSaveState guard(g);
         g.reduceClipRegion(notesArea.toNearestInt());
@@ -804,15 +849,16 @@ void PianoRollView::paint(Graphics& g)
         else
             feedback = pitchName(yToPitch(hover.y));
     }
-    if (feedback.isNotEmpty())
+    if (host.showCanvasFeedback() && feedback.isNotEmpty())
     {
-        Rectangle<float> r{jmax(60.f, (float)getWidth() - 285), 62, 280, 18};
+        Rectangle<float> r{jmax(notesArea.getX(), notesArea.getRight() - 280),
+                           notesArea.getBottom() - 20, jmin(280.f, notesArea.getWidth()), 18};
         g.setColour(c.background);
         g.fillRect(r);
         label(g, feedback, r.reduced(4, 0), 11, c.ink);
     }
     if (!host.hasDocument())
-        label(g, String::fromUTF8("打开或拖入 MIDI 即可编辑；FLP 补全可选。"),
+        label(g, host.emptyDocumentMessage(),
               notesArea.reduced(20), 14, c.muted);
     if (host.hasDocument())
     {
@@ -836,5 +882,6 @@ void PianoRollView::paint(Graphics& g)
         label(g, String::fromUTF8("添加 CC 后即可绘制"), ccArea.reduced(8), 11, c.muted);
     undoButton.setEnabled(host.canUndo() && !host.busy());
     redoButton.setEnabled(host.canRedo() && !host.busy());
+    host.paintOverlay(g);
 }
 }

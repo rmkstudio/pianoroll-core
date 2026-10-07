@@ -1,5 +1,11 @@
 # PianoRollCore validation
 
+## 0.5.2 integration checks — 2026-10-07
+
+The published base `7abf602` passed [remote CI](https://github.com/rmkstudio/pianoroll-core/actions/runs/37569529820): pure core 6/6 and optional JUCE UI 2/2. Snapshot verification independently matched all 53 covered files and aggregate `633dc5048824fcf171a4e9dffc14b6573d55a106106263d3f4fa750fa5e92e13`.
+
+New host policy and deferred-device-prepare regressions are registered in the same suites; CI also verifies the refreshed source manifest and runs real PlaybackTests under ASan/UBSan. Results for these new changes are pending, and earlier candidate numbers below are historical. No Windows/DAW or real-device claim.
+
 ## 0.5.2 candidate — sustained audition, 2026-10-06
 
 Independent source branch `codex/preview-sustain-fix`, based on `b27c915`. GCC 14.2, C++17, Linux; no Windows/DAW listening or MIDI Lines adoption claimed.

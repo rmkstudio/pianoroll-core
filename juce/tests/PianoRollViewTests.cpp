@@ -16,7 +16,9 @@ struct Host final : PianoRollHost {
     std::vector<bool> selected, startSelection;
     int ppq = 96, cc = 1, begins = 0, commits = 0, changes = 0, baselines = 0, seeks = 0;
     bool isBusy = false, loaded = true, dirty = false, rejectFollow = false, linked = false;
-    bool fractional = false;
+    bool fractional = false, folded = false, indexed = false, customLayout = false, scopeRelative = false;
+    bool continuous = false;
+    std::vector<int> sources;
     mutable int noteReads = 0, groupReads = 0, laneReads = 0;
     double lastSeek = -1, loopA = 0, loopB = 0, strokeStart = -1, strokeEnd = -1;
     std::map<double, int> strokePoints;
@@ -31,6 +33,31 @@ struct Host final : PianoRollHost {
     double maximumTime() const override { return 0x0ffffffe; }
     double roundTime(double t) const override { return fractional ? t : std::round(t); }
     double minimumNoteLength() const override { return fractional ? .001 : 1; }
+    double freeTimeStep() const override { return continuous ? 0 : minimumNoteLength(); }
+    bool relativeVelocityUsesScope() const override { return scopeRelative; }
+    int linkedBoundarySource(std::size_t index) const override
+    { return sources.empty() ? PianoRollHost::linkedBoundarySource(index) : sources[index]; }
+    std::vector<std::size_t> noteIndicesInRange(double a, double b) const override
+    {
+        if (!indexed) return PianoRollHost::noteIndicesInRange(a, b);
+        std::vector<std::size_t> result;
+        for (std::size_t i = 0; i < notes.size(); ++i)
+            if (notes[i].start <= b && notes[i].start + notes[i].length >= a) result.push_back(i);
+        return result;
+    }
+    ViewLayout viewLayout(int w, int h, bool v, bool c, float nf, float vf) const override
+    {
+        auto r = defaultViewLayout(w, h, v, c, nf, vf);
+        if (customLayout)
+        {
+            r.play = r.stop = r.clock = r.undo = r.redo = r.pencil = r.pointer = {};
+            r.snap = r.edit = r.follow = r.scroll = {};
+            r.keys.setX(30); r.keys.setWidth(56);
+            r.notes.setX(86); r.notes.setWidth(w - 87);
+            r.ruler.setX(86); r.ruler.setWidth(w - 87);
+        }
+        return r;
+    }
     std::size_t noteCount() const override { return notes.size(); }
     ViewNote note(std::size_t i) const override { ++noteReads; return notes[i]; }
     bool noteSelected(std::size_t i) const override { return selected[i]; }
@@ -42,7 +69,7 @@ struct Host final : PianoRollHost {
     { return [](std::size_t) { return false; }; }
     bool groupAlive(int) const override { ++groupReads; return true; }
     bool groupInScope(int group) const override { return group == 0; }
-    bool pitchesFolded() const override { return false; }
+    bool pitchesFolded() const override { return folded; }
     bool rowHighlighted(int) const override { return false; }
     int controller() const override { return cc; }
     int channel() const override { return 0; }
@@ -355,6 +382,85 @@ void fractionalTimeAndPaintCost()
     require(host.noteReads == (int)host.notes.size(), "Paint reads each note only once");
     require(host.groupReads <= 8, "Paint resolves track membership once per group");
 }
+void productPoliciesAndIndexedNotes()
+{
+    Host host;
+    host.ppq = 1; host.fractional = true; host.continuous = true;
+    host.notes = {{.1234567, .25, 60, 90, 0, 0, true}};
+    host.selected = {false};
+    PianoRollView view(host); host.view = &view;
+    view.setSize(980, 680);
+    view.setViewState({0, 4, 55, 75});
+    view.setSnapPolicy({0, Rounding::nearest});
+    require(std::abs(view.quantize(.1234567) - .1234567) < 1e-12 &&
+            std::abs(view.quantize(.1234567, true) - .1234567) < 1e-12,
+            "Continuous Off and Alt preserve original fractional beat timing");
+    require(view.timeSpan() < 12, "Fractional-time view state is not forced to twelve beats");
+    view.setSnapPolicy({.25, Rounding::nearest});
+    require(view.quantize(.14) == .25, "Product supplied snap rounding also controls creation");
+
+    host.folded = true;
+    view.setPitchRows({60, 62, 64}, true);
+    view.fit();
+    const auto centre = view.noteRect(host.notes[0]).getCentre();
+    drag(view, centre, centre + juce::Point<float>(0, -view.rowHeight()), left);
+    require(host.notes[0].pitch == 62, "Dragging a folded C/D/E row maps C to D, not hidden C sharp");
+
+    host.folded = false; host.indexed = true; host.notes.clear(); host.selected.clear();
+    for (int i = 0; i < 10000; ++i)
+    {
+        host.notes.push_back({double(i), .25, 60, 100, 0, 0, true});
+        host.selected.push_back(false);
+    }
+    view.setViewState({100, 8, 55, 75});
+    host.noteReads = 0;
+    juce::Image image(juce::Image::ARGB, 980, 680, true);
+    juce::Graphics graphics(image);
+    view.paint(graphics);
+    require(host.noteReads < 20, "Indexed hosts provide visible true note indices instead of a full scan");
+    click(view, view.noteRect(host.notes[104]).getCentre());
+    require(host.selected[104] && !host.selected[4], "Indexed hit testing retains original document identity");
+}
+void linkedSourcesAndRelativeScope()
+{
+    Fixture f;
+    f.host.notes = {{0, 96, 60, 90, 0, 0, true},
+                    {96, 96, 62, 80, 0, 0, true},
+                    {96, 96, 65, 70, 0, 0, true}};
+    f.host.selected.assign(3, false);
+    f.host.sources = {0, 0, 16}; f.host.linked = true;
+    f.view.fit();
+    const auto r = f.view.noteRect(f.host.notes[0]);
+    const juce::Point<float> edge(r.getRight() - 1.5f, r.getCentreY());
+    drag(f.view, edge, edge + juce::Point<float>(f.ticks(48), 0), left);
+    require(f.host.notes[0].length == 144 && f.host.notes[1].start == 144 &&
+            f.host.notes[1].length == 48,
+            "Linked ends update only the adjacent note from the same original source");
+    require(f.host.notes[2].start == 96 && f.host.notes[2].length == 96,
+            "Same Voice/channel from another source is not linked");
+
+    f.host.linked = false; f.host.scopeRelative = true;
+    f.host.notes[0].velocity = 90; f.host.notes[1].velocity = 80;
+    f.host.selected.assign(3, false);
+    const auto lane = f.view.velocityLaneBounds();
+    click(f.view, {f.view.timeToX(0), lane.getBottom() - lane.getHeight() * 100 / 127.f}, left | ctrl);
+    require(f.host.notes[0].velocity == 100 && f.host.notes[1].velocity == 90,
+            "Relative velocity without selection can target the complete editable scope");
+}
+void customLayoutHidesGenericChrome()
+{
+    Fixture f;
+    f.host.customLayout = true;
+    f.view.resized();
+    for (auto* control : f.view.keyboardControls())
+        require(!control->isVisible(), "Empty toolbar slots hide their keyboard controls");
+    require(!button(f.view, "Draw tool")->isVisible() && !button(f.view, "Play / pause")->isVisible(),
+            "Empty generic button slots remain invisible");
+    const auto image = f.view.createComponentSnapshot(f.view.getLocalBounds());
+    const int yy = juce::roundToInt(f.view.pitchToY(60) + f.view.rowHeight() * .5f);
+    require(image.getPixelAt(31, yy) == f.view.palette().whiteKey,
+            "Custom keyboard origin is used by painting");
+}
 void busyBlocksEdits()
 {
     Fixture f;
@@ -370,6 +476,7 @@ int main()
         juce::ScopedJuceInitialiser_GUI initialiser;
         geometryAndPaint(); selectionAndMove(); resizeCopyAndFollow(); pencilEraseMarquee();
         lanesNavigationAndRuler(); busyBlocksEdits(); toolbar(); laneSplitFollowsMouse(); fractionalTimeAndPaintCost();
+        productPoliciesAndIndexedNotes(); linkedSourcesAndRelativeScope(); customLayoutHidesGenericChrome();
         std::cout << checks << " piano-roll view checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << "FAILED: " << error.what() << '\n'; return 1; }
 }

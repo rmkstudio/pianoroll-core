@@ -153,6 +153,20 @@ int main() {
     check(b.silent() && !p.isPlaying(), "device restart never reopens pending host-state silence");
     p.setSchedule(one()); p.play(); b.run(p); check(!b.silent(), "message-thread restored schedule can reopen both lifecycle stages");
 
+    // A silence-gated render protects the newly acquired control, while its
+    // previous raw audioSchedule may already be retired by the publisher.
+    PlaybackEngine retiredEngine; retiredEngine.prepare(48000);
+    auto initialSchedule = one(5);
+    std::weak_ptr<const PlaybackSchedule> retiredSchedule = initialSchedule;
+    retiredEngine.setSchedule(initialSchedule); initialSchedule.reset();
+    retiredEngine.play(); b.run(retiredEngine);
+    retiredEngine.setSchedule(one(5)); retiredEngine.requestSilence(); b.run(retiredEngine);
+    retiredEngine.clear();
+    check(retiredSchedule.expired(), "fixture retires previously rendered schedule behind silence gate");
+    retiredEngine.suspendAudio(); retiredEngine.prepare(96000);
+    retiredEngine.setSchedule(one(5)); retiredEngine.play(); b96.run(retiredEngine);
+    check(!b96.silent(), "prepare defers dereference of a retired schedule until fresh acquisition");
+
     // Long CC64 must not hold a released key at full amplitude indefinitely.
     for (double rate : {44100., 48000., 96000.}) {
         PlaybackEngine tail; tail.prepare(rate);

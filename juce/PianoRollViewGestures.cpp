@@ -43,10 +43,10 @@ void PianoRollView::mouseDown(const MouseEvent& e)
 {
     grabKeyboardFocus();
     anchor = e.position;
+    host.gestureStarted(jmax(0.0, xToTime(e.position.x)));
     before.clear();
     for (std::size_t i = 0; i < host.noteCount(); ++i)
         before.push_back(host.note(i));
-    host.gestureStarted(jmax(0.0, xToTime(e.position.x)));
     lastAudition = -1;
     shiftAtDown = e.mods.isShiftDown();
     if (e.mods.isMiddleButtonDown())
@@ -59,12 +59,12 @@ void PianoRollView::mouseDown(const MouseEvent& e)
         beginRuler(e);
         return;
     }
-    if (showVelocity && std::abs(e.y - (velocityArea.getY() - 10)) < 6)
+    if (showVelocity && velocityDivider.contains(e.position))
     {
         gesture = gesture::LaneSplit{true};
         return;
     }
-    if (showCC && std::abs(e.y - (ccArea.getY() - 12)) < 6)
+    if (showCC && ccDivider.contains(e.position))
     {
         gesture = gesture::LaneSplit{false};
         return;
@@ -74,7 +74,7 @@ void PianoRollView::mouseDown(const MouseEvent& e)
         host.pianoKeyDown(yToPitch(e.y));
         return;
     }
-    if (!host.hasDocument() || host.busy())
+    if ((!host.hasDocument() && !host.canCreateNote()) || host.busy())
         return;
     if (e.mods.isCtrlDown() && e.mods.isAltDown() && host.hasSelection())
     {
@@ -101,6 +101,13 @@ void PianoRollView::mouseDown(const MouseEvent& e)
 void PianoRollView::mouseDrag(const MouseEvent& e)
 {
     hover = e.position;
+    host.pointerMoved(e.position);
+    if (keysArea.contains(anchor) && std::holds_alternative<std::monostate>(gesture))
+    {
+        const int pitch = yToPitch(e.y);
+        if (pitch != lastAudition && host.pianoKeyDragged(pitch)) lastAudition = pitch;
+        return;
+    }
     if (auto* split = std::get_if<gesture::LaneSplit>(&gesture))
         dragLaneSplit(*split, e);
     else if (auto* stroke = std::get_if<gesture::ControllerStroke>(&gesture))
@@ -148,6 +155,9 @@ void PianoRollView::mouseUp(const MouseEvent& e)
     }
     if (std::holds_alternative<gesture::LaneSplit>(gesture))
         host.laneLayoutChanged();
+    if (const auto* notes = std::get_if<gesture::NoteDrag>(&gesture))
+        if (notes->edit == gesture::NoteDrag::Edit::move && e.getDistanceFromDragStart() > 4)
+            host.noteGestureDropped(e.position);
     host.commitEdit();
     gesture = {};
     updateCursor(e.position, e.mods);
@@ -157,7 +167,8 @@ void PianoRollView::mouseUp(const MouseEvent& e)
 void PianoRollView::mouseDoubleClick(const MouseEvent& e)
 {
     if (e.mods.isMiddleButtonDown() || e.mods.isRightButtonDown() ||
-        !notesArea.contains(e.position) || host.busy() || !host.hasDocument())
+        !notesArea.contains(e.position) || host.busy() ||
+        (!host.hasDocument() && !host.canCreateNote()))
         return;
     int i = hit(e.position);
     if (i >= 0 && host.note((std::size_t)i).editable)
@@ -256,10 +267,17 @@ void PianoRollView::dragLaneSplit(const gesture::LaneSplit& split, const MouseEv
     // notes to the bottom of the last visible lane. The grab handles sit 9 px below the
     // notes (velocity) and 12 px below the velocity lane (CC), so the handle stays under
     // the mouse.
+    if (host.resizeLane(split.aboveVelocity, e.y - anchor.y))
+    {
+        resized();
+        repaint();
+        return;
+    }
     const float top = notesArea.getY(), usable = jmax(100.f, laneBottom - top);
     if (split.aboveVelocity)
     {
-        const float above = (e.y - top - 9) / usable;
+        const float gap = velocityDivider.getCentreY() - notesArea.getBottom();
+        const float above = (e.y - top - gap) / usable;
         if (showCC)
             noteFraction = jlimit(.25f, .94f - velocityFraction, above);
         else
@@ -267,7 +285,9 @@ void PianoRollView::dragLaneSplit(const gesture::LaneSplit& split, const MouseEv
     }
     else
     {
-        const float above = (e.y - top - 12) / usable;
+        const float gap = ccDivider.getCentreY() -
+                          (showVelocity ? velocityArea.getBottom() : notesArea.getBottom());
+        const float above = (e.y - top - gap) / usable;
         if (showVelocity)
             velocityFraction =
                 jlimit(.06f, jmax(.06f, .94f - noteFraction), above - noteFraction);
@@ -436,14 +456,25 @@ void PianoRollView::dragNotes(gesture::NoteDrag& drag, const MouseEvent& e)
     const auto dt =
         quantize(grabbed.start + delta.x * span / notesArea.getWidth(), e.mods.isAltDown()) -
         grabbed.start;
+    int pitchDelta = roundToInt(-delta.y / row);
+    if (host.pitchesFolded() && !pitchRows.empty())
+    {
+        const auto found = std::lower_bound(pitchRows.begin(), pitchRows.end(), grabbed.pitch);
+        if (found == pitchRows.end() || *found != grabbed.pitch) return;
+        const int targetRow = jlimit(0, (int)pitchRows.size() - 1,
+            (int)std::distance(pitchRows.begin(), found) + pitchDelta);
+        pitchDelta = pitchRows[(std::size_t)targetRow] - grabbed.pitch;
+    }
     const auto constrained = constrainNoteDrag(
-        {dt, roundToInt(-delta.y / row)}, shiftAtDown,
+        {dt, pitchDelta}, shiftAtDown,
         {e.mods.isCtrlDown() || e.mods.isCommandDown(), e.mods.isShiftDown(), e.mods.isAltDown()});
     const auto move = clampMove(bounds, constrained);
     const auto lengthDelta = clampResize(
         bounds,
-        quantize(grabbed.length + delta.x * span / notesArea.getWidth(), e.mods.isAltDown()) -
-            grabbed.length,
+        quantize(edit == gesture::NoteDrag::Edit::draw && host.noteDrawEndsAtPointer()
+                     ? xToTime(e.x)
+                     : grabbed.start + grabbed.length + delta.x * span / notesArea.getWidth(),
+                 e.mods.isAltDown()) - grabbed.start - grabbed.length,
         host.minimumNoteLength());
     if (edit == gesture::NoteDrag::Edit::resize && host.linkedNoteEnds())
     {
@@ -453,17 +484,19 @@ void PianoRollView::dragNotes(gesture::NoteDrag& drag, const MouseEvent& e)
         {
             const auto& n = before[i];
             input.push_back({n.start, n.start + n.length, n.pitch, n.velocity,
-                             n.group * 16 + n.channel, i,
+                             host.linkedBoundarySource(i), i,
                              host.noteSelected(i) ||
-                                 (n.group == grabbed.group && n.channel == grabbed.channel &&
-                                  n.start == grabbed.start + grabbed.length),
+                                 (n.group == grabbed.group &&
+                                  host.linkedBoundarySource(i) == host.linkedBoundarySource((std::size_t)grab) &&
+                                  std::abs(n.start - grabbed.start - grabbed.length) <= host.linkedBoundaryTolerance()),
                              n.editable, keySwitch(i), false});
         }
         ActionRules rules;
         rules.minimumLength = host.minimumNoteLength();
         rules.maximumTime = host.maximumTime();
         auto result = moveLinkedBoundary(input, (std::size_t)grab, true,
-                                         grabbed.start + grabbed.length + lengthDelta, .001, rules);
+                                         grabbed.start + grabbed.length + lengthDelta,
+                                         host.linkedBoundaryTolerance(), rules);
         if (!result)
         {
             host.reportMessage(String(result.error));
@@ -518,7 +551,8 @@ bool PianoRollView::beginVelocityStroke(const MouseEvent& e)
         for (std::size_t i = 0; i < count; ++i)
         {
             const auto n = host.note(i);
-            if (inScope(n) && n.editable)
+            if (inScope(n) && n.editable &&
+                (!stroke.limited || stroke.targets[i]))
             {
                 float d = std::abs(timeToX(n.start) - e.x);
                 if (d < dist)
@@ -534,7 +568,8 @@ bool PianoRollView::beginVelocityStroke(const MouseEvent& e)
             return false;
         }
         stroke.anchorVelocity = host.note((std::size_t)closest).velocity;
-        if (!stroke.limited || !stroke.targets[(std::size_t)closest])
+        if (!host.relativeVelocityUsesScope() &&
+            (!stroke.limited || !stroke.targets[(std::size_t)closest]))
         {
             stroke.targets.assign(count, false);
             stroke.targets[(std::size_t)closest] = true;
@@ -624,8 +659,8 @@ void PianoRollView::updateCursor(juce::Point<float> point, ModifierKeys mods)
         setMouseCursor(MouseCursor::DraggingHandCursor);
         return;
     }
-    if (std::abs(point.y - (velocityArea.getY() - 10)) < 6 ||
-        std::abs(point.y - (ccArea.getY() - 12)) < 6)
+    if ((showVelocity && velocityDivider.contains(point)) ||
+        (showCC && ccDivider.contains(point)))
     {
         setMouseCursor(MouseCursor::UpDownResizeCursor);
         return;
@@ -665,6 +700,7 @@ void PianoRollView::updateCursor(juce::Point<float> point, ModifierKeys mods)
 void PianoRollView::mouseMove(const MouseEvent& e)
 {
     hover = e.position;
+    host.pointerMoved(e.position);
     hoverFree = e.mods.isAltDown();
     updateCursor(e.position, e.mods);
     repaint();
@@ -672,6 +708,7 @@ void PianoRollView::mouseMove(const MouseEvent& e)
 void PianoRollView::mouseExit(const MouseEvent&)
 {
     hover = {-1, -1};
+    host.pointerMoved(hover);
     repaint();
 }
 }

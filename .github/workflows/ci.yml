@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Verify release source manifest
+        run: python tools/snapshot.py --verify .
       - name: Configure existing CMake project
         run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPIANO_ROLL_CORE_BUILD_TESTS=ON -DPIANO_ROLL_CORE_BUILD_EXAMPLE=ON
       - name: Compile
@@ -61,3 +63,17 @@ jobs:
         run: cmake --build build-juce --parallel 2
       - name: Run shared JUCE UI tests
         run: xvfb-run -a ctest --test-dir build-juce --output-on-failure --no-tests=error --timeout 240
+
+  playback-sanitizers:
+    name: Playback ASan and UBSan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check real playback implementation under sanitizers
+        run: |
+          mkdir -p work
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -I include tests/PlaybackTests.cpp src/Playback.cpp -pthread -o work/playback-sanitized
+          ASAN_OPTIONS=detect_leaks=1 work/playback-sanitized

@@ -111,7 +111,7 @@ struct PlaybackEngine::Impl {
     std::uint64_t audioRevision = 0;
     double cursor = 0, loopStart = 0, loopEnd = 0;
     int solo = -1;
-    bool playing = false;
+    bool playing = false, voicesNeedReset = false;
     std::size_t nextNote = 0, nextControl = 0;
     struct Tone {
         bool active = false;
@@ -319,11 +319,12 @@ void PlaybackEngine::prepare(double sampleRate) {
     auto& p = *impl;
     p.rate = std::isfinite(sampleRate) && sampleRate >= 1 ? sampleRate : 44100;
     p.auditionActive = false; p.audioAuditionSerial = 0; p.auditionEnvelope = 0; p.auditionPhase = 0;
-    // The host has stopped render(). Its last hazard still owns audioSchedule,
-    // so recalculating voice steps is safe even if the message thread publishes.
+    // A gated or failed acquire may no longer protect audioSchedule. Defer
+    // chasing until render acquires a live control; preserve the retained cursor
+    // unless a newer control carries an explicit seek/document replacement.
     // Do not touch desired controls here: prepare can be a separate host thread.
     p.prepareSteps();
-    p.resetAt(p.cursor);
+    p.voiceCount = 0; p.audioSchedule = nullptr; p.voicesNeedReset = true;
     p.deviceSuspended.store(false);
 }
 void PlaybackEngine::suspendAudio() noexcept {
@@ -426,7 +427,10 @@ void PlaybackEngine::render(float* const* channels, int channelCount, int count)
         p.audioRevision = control->revision; p.audioSchedule = control->schedule.get();
         p.cursor = control->cursor; p.playing = control->playing;
         p.solo = control->solo; p.loopStart = control->loopStart; p.loopEnd = control->loopEnd;
-        p.resetAt(p.cursor);
+        p.resetAt(p.cursor); p.voicesNeedReset = false;
+    } else if (p.voicesNeedReset) {
+        p.audioSchedule = control->schedule.get();
+        p.resetAt(p.cursor); p.voicesNeedReset = false;
     }
     if (!p.playing || !p.audioSchedule) { p.report(); return; }
     const auto& notes = p.audioSchedule->notes;

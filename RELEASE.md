@@ -1,6 +1,18 @@
+# PianoRollCore 0.5.2 — Lines host integration
+
+## 0.5.2 Lines integration branch — 2026-10-07
+
+Remote source base: `7abf60236c4c6aa19563853203436faabdc8541b` on `codex/pianoroll-view-0.5.2`. The published 55-file snapshot verified: all 53 covered file hashes and the combined source hash matched. Existing source/validation records below describe earlier candidate work.
+
+This branch adds optional, backward-compatible host policies for continuous beat movement, navigation limits, real visible note indices, independent MIDI source boundaries, thin note geometry and nearest-hit selection. Folded pitch drags use the displayed row table. Product toolbar slots can be empty; their children are hidden. Hosts may retain existing chrome and supply drawing callbacks while the shared view owns canvas traversal and gestures. CC follow and revision-safe commit remain host responsibilities.
+
+Playback preparation now clears audio-owned voice pointers and defers chasing until render has acquired a live schedule; this prevents dereferencing a retired schedule after a restore gate or failed handoff. Cursor/revision policy is preserved. Tests cover retirement/device restart under ASan/UBSan.
+
+Current CI evidence is recorded in VALIDATION.md; Windows/DAW listening remains outside this branch's validation.
+
 # 0.5.2 candidate — sustained audition tails
 
-Based on the local 0.5.1 candidate commit `b27c915`, on `codex/preview-sustain-fix`. Not merged or tagged; remote core publication remains pending.
+Based on the local 0.5.1 candidate commit `b27c915`, on `codex/preview-sustain-fix`. Published source base is now available on `codex/pianoroll-view-0.5.2`; it is not a main-branch release or tag.
 
 - The reference synth now distinguishes key release from CC64 extension. Only pedal-held, released keys decay (-60 dB in six seconds, recycled below -80 dB). A long physically held key retains the existing envelope. Seek/resume/loop chase uses elapsed tail age, so exhausted tails cannot restart at full volume.
 - `PlaybackNote::keyEnd` is derived by `makePlaybackSchedule`; adapters still supply unextended `end`. This addition requires recompilation. Musical schedule endpoints, source-isolated pedal/retrigger handling and serialized MIDI data are unchanged.
