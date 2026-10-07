@@ -33,6 +33,36 @@ bool textInputHasFocus(const juce::Component* origin)
     return false;
 }
 namespace {
+juce::Font componentFont(juce::Component& component, float height)
+{
+    // Raw Font() resolves through JUCE's global default LookAndFeel. Bind the
+    // enclosing product's typeface explicitly, including after reparenting.
+    const juce::Font requested(height);
+    if (auto face = component.getLookAndFeel().getTypefaceForFont(requested))
+        return juce::Font(face).withHeight(height);
+    return requested;
+}
+class FontComboBox final : public juce::ComboBox {
+public:
+    void lookAndFeelChanged() override
+    {
+        juce::ComboBox::lookAndFeelChanged();
+        updateFont();
+    }
+    void resized() override
+    {
+        juce::ComboBox::resized();
+        updateFont();
+    }
+private:
+    void updateFont()
+    {
+        // ComboBox recreates its label after its parent's LAF notification.
+        for (auto* child : getChildren())
+            if (auto* label = dynamic_cast<juce::Label*>(child))
+                label->setFont(componentFont(*this, getLookAndFeel().getComboBoxFont(*this).getHeight()));
+    }
+};
 class ParameterForm final : public juce::Component {
 public:
     std::function<void()> onSubmit;
@@ -94,7 +124,7 @@ public:
         }
     }
 private:
-    struct Field { CommandParameter parameter; juce::Label label; juce::TextEditor editor; juce::ComboBox choice; };
+    struct Field { CommandParameter parameter; juce::Label label; juce::TextEditor editor; FontComboBox choice; };
     std::vector<std::unique_ptr<Field>> fields;
 };
 juce::String bindingLabel(const CommandDispatcher& dispatcher, const std::string& id)
@@ -116,11 +146,11 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
             ui.paintRowBackground(graphics, width, height, selected);
             const auto& step = ui.draft.steps[static_cast<std::size_t>(row)];
             const auto* spec = ui.dispatcher.registry().find(step.id);
-            graphics.setFont(juce::Font(14.0f));
+            graphics.setFont(componentFont(ui.panel, 14.0f));
             graphics.drawText(juce::String(row + 1) + ". " + juce::String(spec ? spec->name : step.id), 8, 2, width - 16, 21, juce::Justification::centredLeft);
             juce::StringArray parameters;
             for (const auto& parameter : step.arguments) parameters.add(juce::String(parameter.first) + "=" + juce::String(parameter.second));
-            graphics.setOpacity(.66f); graphics.setFont(juce::Font(11.5f));
+            graphics.setOpacity(.66f); graphics.setFont(componentFont(ui.panel, 11.5f));
             graphics.drawText(parameters.joinIntoString(", "), 8, 23, width - 16, 17, juce::Justification::centredLeft);
         }
         void selectedRowsChanged(int row) override { ui.selectStep(row); }
@@ -139,7 +169,7 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
     juce::Label currentKey, status;
     juce::Viewport parametersView;
     ParameterForm parameters;
-    juce::ComboBox macroChoice, stepChoice;
+    FontComboBox macroChoice, stepChoice;
     juce::TextEditor macroName;
     juce::TextButton newMacro{"New"}, deleteMacro{"Delete"}, saveMacro{"Save"}, runMacro{"Run"},
         bindMacro{"Shortcut"}, discardMacro{"Discard"}, addStep{"Add step"}, updateStep{"Update step"},
@@ -361,9 +391,9 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
         const auto& entry = entries[static_cast<std::size_t>(row)];
         paintRowBackground(graphics, width, height, selected);
         const auto keys = bindingLabel(dispatcher, entry.id);
-        graphics.setFont(juce::Font(14.0f));
+        graphics.setFont(componentFont(panel, 14.0f));
         graphics.drawText(juce::String(entry.name), 9, 2, width - 185, 23, juce::Justification::centredLeft);
-        graphics.setFont(juce::Font(12.0f));
+        graphics.setFont(componentFont(panel, 12.0f));
         graphics.drawText(keys, juce::jmax(10, width - 177), 3, 166, 22, juce::Justification::centredRight);
         graphics.setOpacity(.65f);
         graphics.drawText(juce::String(entry.category), 9, 24, width - 18, 17, juce::Justification::centredLeft);
@@ -554,10 +584,16 @@ struct CommandPanel::Impl final : juce::ListBoxModel, juce::KeyListener {
             if (auto* editor = dynamic_cast<juce::TextEditor*>(&component)) {
                 editor->setColour(juce::TextEditor::backgroundColourId, background);
                 editor->setColour(juce::TextEditor::textColourId, foreground);
+                const auto font = componentFont(component, editor->getFont().getHeight());
+                editor->setFont(font);
+                editor->applyFontToAllText(font, true);
                 editor->applyColourToAllText(foreground, true);
                 editor->setColour(juce::TextEditor::outlineColourId, foreground.withAlpha(.2f));
             }
-            if (auto* label = dynamic_cast<juce::Label*>(&component)) label->setColour(juce::Label::textColourId, foreground);
+            if (auto* label = dynamic_cast<juce::Label*>(&component)) {
+                label->setColour(juce::Label::textColourId, foreground);
+                label->setFont(componentFont(component, label->getFont().getHeight()));
+            }
             if (auto* combo = dynamic_cast<juce::ComboBox*>(&component)) {
                 combo->setColour(juce::ComboBox::backgroundColourId, background);
                 combo->setColour(juce::ComboBox::textColourId, foreground);
@@ -590,5 +626,6 @@ void CommandPanel::paint(juce::Graphics& graphics)
 }
 void CommandPanel::resized() { if (impl_) impl_->layout(); }
 void CommandPanel::lookAndFeelChanged() { if (impl_) impl_->updateColours(); }
+void CommandPanel::parentHierarchyChanged() { if (impl_) impl_->updateColours(); }
 bool CommandPanel::keyPressed(const juce::KeyPress& key) { return impl_->handleKey(key); }
 } // namespace pianoroll

@@ -175,6 +175,154 @@ void closeAndKeyChecks()
                 "captured key reaches its assigned command");
     }
 }
+
+struct FontLook final : juce::LookAndFeel_V4 {
+    juce::Typeface::Ptr face;
+    explicit FontLook(bool alternate)
+    {
+        auto* custom = new juce::CustomTypeface();
+        face = custom;
+        custom->setCharacteristics(alternate ? "Panel fixture B" : "Panel fixture A", "Regular", .8f, '?');
+        const auto characters = juce::String::fromUTF8(u8"命令分类中文参数宏");
+        for (int code = 32; code < 127; ++code) add(*custom, static_cast<juce::juce_wchar>(code), alternate);
+        for (int i = 0; i < characters.length(); ++i) add(*custom, characters[i], alternate);
+    }
+    static void add(juce::CustomTypeface& custom, juce::juce_wchar code, bool alternate)
+    {
+        juce::Path path;
+        if (code != ' ') {
+            if (alternate) {
+                path.startNewSubPath(.05f, -.72f); path.lineTo(.48f, -.72f);
+                path.lineTo(.25f, -.06f); path.closeSubPath();
+            } else {
+                path.addRectangle(.05f, -.72f, .35f, .62f);
+                path.addRectangle(.43f, -.46f, .08f, .34f);
+            }
+        }
+        custom.addGlyph(code, path, .6f);
+    }
+    juce::Typeface::Ptr getTypefaceForFont(const juce::Font&) override { return face; }
+};
+bool pixelsEqual(const juce::Image& a, const juce::Image& b, juce::Rectangle<int> area)
+{
+    for (int y = area.getY(); y < area.getBottom(); ++y)
+        for (int x = area.getX(); x < area.getRight(); ++x)
+            if (a.getPixelAt(x, y).getARGB() != b.getPixelAt(x, y).getARGB()) return false;
+    return true;
+}
+void requireRowFont(juce::ListBox& list, FontLook& look, bool macro)
+{
+    constexpr int width = 440;
+    const int height = macro ? 43 : 45;
+    juce::Image actual(juce::Image::ARGB, width, height, true), expected(actual.getFormat(), width, height, true);
+    juce::Graphics graphics(actual);
+    list.getListBoxModel()->paintListBoxItem(0, graphics, width, height, false);
+    juce::Graphics reference(expected);
+    reference.setColour(look.findColour(juce::PopupMenu::textColourId));
+    reference.setFont(juce::Font(look.face).withHeight(14));
+    if (macro) {
+        reference.drawText(juce::String::fromUTF8(u8"1. 命令"), 8, 2, width - 16, 21, juce::Justification::centredLeft);
+        reference.setOpacity(.66f); reference.setFont(juce::Font(look.face).withHeight(11.5f));
+        reference.drawText(juce::String::fromUTF8(u8"text=中文"), 8, 23, width - 16, 17, juce::Justification::centredLeft);
+        require(pixelsEqual(actual, expected, actual.getBounds()), "macro name and argument rows render the enclosing local typeface");
+    } else {
+        reference.drawText(juce::String::fromUTF8(u8"命令"), 9, 2, width - 185, 23, juce::Justification::centredLeft);
+        reference.setFont(juce::Font(look.face).withHeight(12)); reference.setOpacity(.65f);
+        reference.drawText(juce::String::fromUTF8(u8"分类"), 9, 24, width - 18, 17, juce::Justification::centredLeft);
+        require(pixelsEqual(actual, expected, actual.getBounds()), "command name and category rows render the enclosing local typeface");
+    }
+    bool painted = false;
+    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
+        painted = painted || actual.getPixelAt(x, y).getAlpha() != 0;
+    require(painted, "local typeface row rendering has visible glyph pixels");
+}
+void requireFormFonts(juce::Component& form, const juce::Typeface::Ptr& face)
+{
+    int labels = 0, editors = 0;
+    for (auto* child : form.getChildren()) {
+        if (auto* label = dynamic_cast<juce::Label*>(child)) {
+            require(label->getFont().getTypefacePtr() == face, "rebuilt parameter label uses inherited local typeface");
+            ++labels;
+        }
+        if (auto* editor = dynamic_cast<juce::TextEditor*>(child)) {
+            require(editor->getFont().getTypefacePtr() == face, "rebuilt parameter text uses inherited local typeface");
+            ++editors;
+        }
+    }
+    require(labels == 1 && editors == 1, "font fixture exercises the real parameter label and editor");
+}
+void requireComboFont(juce::ComboBox& combo, const juce::Typeface::Ptr& face)
+{
+    auto* label = dynamic_cast<juce::Label*>(combo.getChildComponent(0));
+    require(label != nullptr && label->getFont().getTypefacePtr() == face,
+            "macro combo label keeps local typeface after JUCE recreates it");
+}
+void localFontChecks()
+{
+    FontLook first(false), second(true);
+    juce::Component parent;
+    CommandRegistry commands;
+    commands.add({"font.command", u8"命令", u8"分类", "", {},
+        {{"text", u8"参数", u8"中文", ParameterType::text, 0, 0, {}}}, true});
+    Host host; CommandConfiguration config; CommandDispatcher dispatcher(commands, config, host);
+    // Real product order: the panel and its initial form exist before attachment.
+    CommandPanel panel(dispatcher, [] { return juce::Result::ok(); }, [] {});
+    search(panel, u8"命令");
+    auto& query = control<juce::TextEditor>(panel, "command.search");
+    const auto originalFace = query.getFont().getTypefacePtr();
+    require(originalFace != first.face, "panel initially has the unchanged default typeface");
+    parent.setLookAndFeel(&first);
+    parent.addAndMakeVisible(panel);
+    require(query.getFont().getTypefacePtr() == first.face, "late attachment rebinds an existing search editor font");
+    requireFormFonts(*find(panel, "command.parameters"), first.face);
+    requireRowFont(control<juce::ListBox>(panel, "command.results"), first, false);
+    {
+        // Existing TextEditor runs must change too, not only its insertion font.
+        juce::TextEditor reference;
+        reference.setLookAndFeel(&first);
+        query.copyAllExplicitColoursTo(reference);
+        reference.setSize(query.getWidth(), query.getHeight());
+        reference.setFont(juce::Font(first.face).withHeight(query.getFont().getHeight()));
+        reference.setText(query.getText(), false);
+        const auto actual = query.createComponentSnapshot(query.getLocalBounds());
+        const auto expected = reference.createComponentSnapshot(reference.getLocalBounds());
+        require(pixelsEqual(actual, expected, actual.getBounds()), "late attachment rebinds already populated TextEditor glyph runs");
+        reference.setLookAndFeel(nullptr);
+    }
+    search(panel, "not-a-command");
+    search(panel, u8"命令");
+    requireFormFonts(*find(panel, "command.parameters"), first.face);
+    panel.showPage(CommandPanel::Page::macros);
+    click(panel, "macro.new");
+    auto& name = control<juce::TextEditor>(panel, "macro.name");
+    name.setText(juce::String::fromUTF8(u8"中文宏"), false); name.onTextChange();
+    require(name.getFont().getTypefacePtr() == first.face, "new macro text inherits the local typeface");
+    auto& choice = control<juce::ComboBox>(panel, "macro.command");
+    choice.setSelectedId(1, juce::dontSendNotification); choice.onChange();
+    requireFormFonts(*find(panel, "macro.parameters"), first.face);
+    requireComboFont(control<juce::ComboBox>(panel, "macro.command"), first.face);
+    click(panel, "macro.addStep"); click(panel, "macro.save");
+    requireComboFont(control<juce::ComboBox>(panel, "macro.choice"), first.face);
+    panel.setSize(616, 351);
+    requireComboFont(choice, first.face);
+    requireComboFont(control<juce::ComboBox>(panel, "macro.choice"), first.face);
+    panel.setSize(720, 590);
+    requireRowFont(control<juce::ListBox>(panel, "macro.steps"), first, true);
+    parent.setLookAndFeel(&second);
+    require(query.getFont().getTypefacePtr() == second.face && name.getFont().getTypefacePtr() == second.face,
+            "changing inherited LookAndFeel rebinds populated editors");
+    requireFormFonts(*find(panel, "macro.parameters"), second.face);
+    requireComboFont(control<juce::ComboBox>(panel, "macro.command"), second.face);
+    requireComboFont(control<juce::ComboBox>(panel, "macro.choice"), second.face);
+    requireRowFont(control<juce::ListBox>(panel, "macro.steps"), second, true);
+    panel.showPage(CommandPanel::Page::search); search(panel, u8"命令");
+    requireFormFonts(*find(panel, "command.parameters"), second.face);
+    requireRowFont(control<juce::ListBox>(panel, "command.results"), second, false);
+    parent.removeChildComponent(&panel);
+    require(query.getFont().getTypefacePtr() == originalFace, "detaching the panel restores the default typeface");
+    parent.setLookAndFeel(nullptr);
+}
+
 void preferenceChecks(const juce::File& output)
 {
     auto commands = registry(); Host host; CommandConfiguration config; CommandDispatcher dispatcher(commands, config, host);
@@ -227,7 +375,7 @@ int main(int argc, char** argv)
     try {
         juce::ScopedJuceInitialiser_GUI initialiser;
         auto output = argc > 1 ? juce::File(argv[1]) : juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("piano-command-ui-checks");
-        output.createDirectory(); panelChecks(output); closeAndKeyChecks(); preferenceChecks(output); transformChecks();
+        output.createDirectory(); panelChecks(output); closeAndKeyChecks(); localFontChecks(); preferenceChecks(output); transformChecks();
         std::cout << checks << " command UI, preference and gesture checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << "FAILED: " << error.what() << '\n'; return 1; }
 }

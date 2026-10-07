@@ -36,6 +36,7 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void lookAndFeelChanged() override;
+    void parentHierarchyChanged() override;
     bool keyPressed(const juce::KeyPress&) override;
 private:
     struct Impl;

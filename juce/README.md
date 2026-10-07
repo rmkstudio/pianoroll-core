@@ -3,6 +3,10 @@
 Link `PianoRollCore::CommandUI`, include `PianoRollCore/CommandUI.h`, and own a
 `CommandPanel` in the plugin editor. It inherits the enclosing LookAndFeel.
 Destroy the panel before its dispatcher, command host, or LookAndFeel.
+Command and macro rows, parameter labels and populated text editors explicitly
+bind the enclosing LookAndFeel's default typeface. This is refreshed after late
+parent attachment, parameter form rebuilding and subsequent LookAndFeel changes;
+no application-wide default font is changed.
 
 - `CommandPanel(dispatcher, save, close)` offers command search, key assignment,
   and macro editing. `setSearchText` can open a specific tool's parameter form.
