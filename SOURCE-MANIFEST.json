@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "PianoRollCore",
   "version": "0.5.2",
-  "source_tree_sha256": "fe2bccd9abbb04d5a8f2a0b0d5fa8c8caf28f663ee0a8a0e454149fbb98e58bc",
+  "source_tree_sha256": "f553ff98af92736707849b3d7e18687bc8de7d578367588265cf30e6b8adae73",
   "source_tree_hash_definition": "SHA256 of UTF-8 SHA256SUMS.txt, sorted relative paths, LF newlines",
   "files": {
     "CMakeLists.txt": "193ba3aec87e3196de63297a4686f3865d04ad4df31b3591c0ba3897416f7cb4",
@@ -57,6 +57,6 @@
     "tests/ExperienceTests.cpp": "20d35c7b81c5dd632a3b7381d056f9ef0fcb74ed007ac86795c1134468827dd1",
     "tests/NoteActionTests.cpp": "57a812e6de209aae887a25ad7039b4ef4ed71a4162be4320d9dae24b31d5d399",
     "tests/PlaybackTests.cpp": "42b7d271520876e4b4056a11bfd9d0b3e93ed14f15fb8c034abc4f4cd50892e3",
-    "tools/snapshot.py": "1596c50647e5681f62881cdd89f158830958ae8efd4f33ccefe1f1a0c85c3f7f"
+    "tools/snapshot.py": "13f9b3f6c9ada59d7d77e5ef4e83c5574a2873bcf21397d6d70047d35e7f1098"
   }
 }

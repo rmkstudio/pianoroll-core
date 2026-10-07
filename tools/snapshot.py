@@ -24,12 +24,14 @@ def is_build_binary(path):
 
 
 def source_paths(root):
-    return sorted(p for p in root.rglob("*")
-                  if p.is_file() and p.name not in GENERATED
-                  and not any(part in EXCLUDED_DIRS or part.startswith("build-")
-                              for part in p.relative_to(root).parts)
-                  and p.suffix not in {".pyc", ".zip"}
-                  and not is_build_binary(p))
+    # Path comparison follows platform case rules; manifests use POSIX strings.
+    return sorted((p for p in root.rglob("*")
+                   if p.is_file() and p.name not in GENERATED
+                   and not any(part in EXCLUDED_DIRS or part.startswith("build-")
+                               for part in p.relative_to(root).parts)
+                   and p.suffix not in {".pyc", ".zip"}
+                   and not is_build_binary(p)),
+                  key=lambda p: p.relative_to(root).as_posix())
 
 
 def digest(path):
@@ -51,13 +53,13 @@ def source_version(root):
 
 
 def refresh(root):
-    (root / "VERSION").write_text(source_version(root) + "\n", encoding="utf-8")
+    (root / "VERSION").write_text(source_version(root) + "\n", encoding="utf-8", newline="\n")
     files, sums, tree_hash = collect(root)
     data = {"schema": 1, "name": "PianoRollCore", "version": (root / "VERSION").read_text().strip(),
             "source_tree_sha256": tree_hash,
             "source_tree_hash_definition": "SHA256 of UTF-8 SHA256SUMS.txt, sorted relative paths, LF newlines",
             "files": files}
-    (root / "SOURCE-MANIFEST.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    (root / "SOURCE-MANIFEST.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     (root / "SHA256SUMS.txt").write_text(sums, encoding="utf-8", newline="\n")
     return data
 
